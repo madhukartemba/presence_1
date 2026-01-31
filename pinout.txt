@@ -1,0 +1,10 @@
+| Device      | Signal   | GPIO       |
+| ----------- | -------- | ---------- |
+| LD2420      | TX → ESP | GPIO5      |
+| LD2420      | RX ← ESP | GPIO4      |
+| LD2420      | D-OUT    | GPIO7      |
+| VEML7700    | SDA      | GPIO8      |
+| VEML7700    | SCL      | GPIO9      |
+| Push Button | Input    | GPIO3      |
+| Neopixel    | Data     | GPIO6      |
+| Buzzer      | PWM      | GPIO21     |
