@@ -1,0 +1,48 @@
+esphome:
+  name: esp32c3-presence
+  friendly_name: ESP32C3 Presence Node
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+# USB logging disabled UART usage
+logger:
+  baud_rate: 0
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+
+i2c:
+  sda: GPIO8
+  scl: GPIO9
+  scan: true
+  frequency: 100kHz
+
+sensor:
+  - platform: veml7700
+    address: 0x10
+    update_interval: 30s
+
+    ambient_light:
+      name: "Ambient Light (Lux)"
+
+    full_spectrum:
+      name: "Full Spectrum Light"
+
+    infrared:
+      name: "Infrared Light"
+
+    actual_gain:
+      name: "VEML7700 Gain"
+
+    actual_integration_time:
+      name: "VEML7700 Integration Time"
