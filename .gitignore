@@ -5,3 +5,7 @@
 # Secrets file
 secrets.yaml
 **/secrets.yaml
+
+# ESPHome
+.esp_home
+**/.esp_home
