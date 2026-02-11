@@ -1,6 +1,7 @@
 esphome:
-  name: light_sensor
-  friendly_name: Light Sensor
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -9,7 +10,7 @@ esp32:
 
 # USB logging disabled UART usage
 logger:
-  baud_rate: 0
+  baud_rate: 115200
 
 api:
 

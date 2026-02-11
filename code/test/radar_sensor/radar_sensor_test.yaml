@@ -1,6 +1,7 @@
 esphome:
-  name: ld2420_sensor
-  friendly_name: Radar Sensor
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
 esp32:
   board: esp32-c3-devkitm-1
   framework:
