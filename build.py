@@ -78,7 +78,8 @@ def main():
                 secrets_created = True
 
         command = [
-            "esphome",
+            "python3",
+            "-m", "esphome",
             "-s", "device_id", args.device_id,
             "run" if not args.compile_only else "compile",
             str(yaml_relative),

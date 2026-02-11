@@ -9,3 +9,7 @@ secrets.yaml
 # ESPHome
 .esp_home
 **/.esp_home
+
+# Venv
+.venv
+**/venv
