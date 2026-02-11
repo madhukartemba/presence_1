@@ -1,5 +1,0 @@
-substitutions:
-  device_name: radar_sensor_1
-  friendly_name: Radar Sensor 1
-
-<<: !include ../radar_sensor.yaml
