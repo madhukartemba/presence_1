@@ -66,16 +66,36 @@ binary_sensor:
     name: "Radar Presence"
     device_class: occupancy
 
-  # Push button
+  # Push button with multi-click support
   - platform: gpio
     pin:
       number: GPIO3
       mode: INPUT_PULLUP
       inverted: true
     name: "Push Button"
-    on_press:
-      then:
-        - light.toggle: status_pixels
+    # on_multi_click is the correct trigger for handling patterns
+    on_multi_click:
+      # Single Click
+      - timing:
+          - ON for 50ms to 350ms
+          - OFF for at least 200ms
+        then:
+          - logger.log: "Button Single Clicked"
+
+      # Double Click
+      - timing:
+          - ON for 50ms to 350ms
+          - OFF for 50ms to 350ms
+          - ON for 50ms to 350ms
+        then:
+          - logger.log: "Button Double Clicked"
+
+      # Long Press
+      - timing:
+          - ON for at least 500ms
+        then:
+          - logger.log: "Button Long Pressed"
+
 
 # --------------------
 # Neopixels (5 LEDs)
@@ -86,6 +106,6 @@ light:
     variant: WS2812
     pin: GPIO6
     num_leds: 5
-    name: "Status Neopixels"
-    id: status_pixels
+    name: "Integrated NeoPixels"
+    id: integrated_neo_pixels
     restore_mode: "RESTORE_DEFAULT_OFF"
