@@ -30,6 +30,20 @@ i2c:
   frequency: 100kHz
 
 # ====================
+# EVENT ENTITY (The "Commercial" Feature)
+# ====================
+event:
+  - platform: template
+    name: "Button"
+    id: button_event
+    device_class: button
+    # These are the specific event types HA will recognize
+    event_types:
+      - single_press
+      - double_press
+      - long_press
+
+# ====================
 # SENSORS
 # ====================
 sensor:
@@ -73,14 +87,19 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     name: "Push Button"
-    # on_multi_click is the correct trigger for handling patterns
+    # Internal: true hides the raw "On/Off" state from HA so you only see the Events
+    internal: true
+    
     on_multi_click:
       # Single Click
       - timing:
           - ON for 50ms to 350ms
           - OFF for at least 200ms
         then:
-          - logger.log: "Button Single Clicked"
+          - event.trigger:
+              id: button_event
+              event_type: single_press
+          - logger.log: "Event Fired: Single Press"
 
       # Double Click
       - timing:
@@ -88,14 +107,19 @@ binary_sensor:
           - OFF for 50ms to 350ms
           - ON for 50ms to 350ms
         then:
-          - logger.log: "Button Double Clicked"
+          - event.trigger:
+              id: button_event
+              event_type: double_press
+          - logger.log: "Event Fired: Double Press"
 
       # Long Press
       - timing:
           - ON for at least 500ms
         then:
-          - logger.log: "Button Long Pressed"
-
+          - event.trigger:
+              id: button_event
+              event_type: long_press
+          - logger.log: "Event Fired: Long Press"
 
 # --------------------
 # Neopixels (5 LEDs)
