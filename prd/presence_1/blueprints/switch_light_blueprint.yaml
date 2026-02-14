@@ -1,0 +1,78 @@
+blueprint:
+  name: ESPhome Button Light Controller (Multi-Light)
+  description: >
+    Controls multiple lights using an ESPhome button event.
+    Single press toggles lights.
+    Double press toggles color temperature between 200 mireds and max.
+    (Uses the first selected light as the reference for the current state).
+  domain: automation
+
+  input:
+    button_entity:
+      name: Button Entity
+      description: The ESPhome event entity (like event.bedroom_button)
+      selector:
+        entity:
+          domain: event
+    light_entities:
+      name: Light Entities
+      description: The lights to control
+      selector:
+        entity:
+          domain: light
+          multiple: true
+
+mode: queued
+max: 10
+
+trigger:
+  - platform: state
+    entity_id: !input button_entity
+
+action:
+  - choose:
+      # SINGLE PRESS -> toggle all lights
+      - conditions:
+          - condition: state
+            entity_id: !input button_entity
+            attribute: event_type
+            state: single_press
+        sequence:
+          - service: light.toggle
+            target:
+              entity_id: !input light_entities
+
+      # DOUBLE PRESS -> toggle color temperature
+      - conditions:
+          - condition: state
+            entity_id: !input button_entity
+            attribute: event_type
+            state: double_press
+        sequence:
+          # We import the lights input into a variable named 'lights'
+          - variables:
+              lights: !input light_entities
+          
+          - service: light.turn_on
+            target:
+              entity_id: !input light_entities
+            data:
+              transition: 1
+              color_temp: >
+                {# 1. Handle the input whether it is a single string or a list #}
+                {% set entity_list = lights if lights is iterable and lights is not string else [lights] %}
+                
+                {# 2. Pick the first light as the reference to check current state #}
+                {% set ref_entity = entity_list[0] %}
+
+                {# 3. Get attributes from the reference light #}
+                {% set current = state_attr(ref_entity, 'color_temp') | int(default=200) %}
+                {% set min_ct = 200 %}
+                {% set max_ct = state_attr(ref_entity, 'max_mireds') | int(default=500) %}
+                
+                {# 4. Decide logic based on reference light #}
+                {% if current <= min_ct + 5 %}
+                  {{ max_ct }}
+                {% else %}
+                  {{ min_ct }}
+                {% endif %}
