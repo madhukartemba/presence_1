@@ -19,7 +19,6 @@ esp32:
   framework:
     type: arduino
 
-# USB logging disabled UART usage
 logger:
   baud_rate: 115200
 
@@ -31,6 +30,12 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+
+  ap:
+    ssid: "PresenceNode_${device_id}_Setup"
+    password: ""
+
+captive_portal:
 
 
 interval:
