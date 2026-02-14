@@ -11,6 +11,7 @@ esphome:
     then:
       - lambda: |-
           led_engine_setup();
+          start_boot_animation();
 
 
 esp32:
