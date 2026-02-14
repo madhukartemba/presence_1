@@ -99,11 +99,18 @@ switch:
       return id(motion_enabled);
     turn_on_action:
       - globals.set: { id: motion_enabled, value: 'true' }
+      - lambda: |-
+          // Optional: LED feedback when motion enabled via HA
+          start_center_pulse_long_press();
     turn_off_action:
       - globals.set: { id: motion_enabled, value: 'false' }
       - binary_sensor.template.publish:
           id: radar_presence
           state: OFF
+      - lambda: |-
+          // LED feedback when motion disabled via HA
+          start_center_pulse_long_press_disabled();
+
 
 # ====================
 # BINARY SENSORS
