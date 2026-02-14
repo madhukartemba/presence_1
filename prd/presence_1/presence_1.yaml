@@ -13,7 +13,6 @@ esphome:
           led_engine_setup();
           start_boot_animation();
 
-
 esp32:
   board: esp32-c3-devkitm-1
   framework:
@@ -30,13 +29,17 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-
   ap:
     ssid: "PresenceNode_${device_id}_Setup"
     password: ""
 
 captive_portal:
 
+globals:
+  - id: motion_enabled
+    type: bool
+    restore_value: no
+    initial_value: 'true'
 
 interval:
   - interval: 16ms
@@ -44,9 +47,8 @@ interval:
       - lambda: |-
           led_engine_loop();
 
-
 # --------------------
-# I2C for VEML7700
+# I2C
 # --------------------
 i2c:
   sda: GPIO8
@@ -55,68 +57,76 @@ i2c:
   frequency: 100kHz
 
 # ====================
-# EVENT ENTITY (The "Commercial" Feature)
+# EVENT ENTITY
 # ====================
 event:
   - platform: template
     name: "Button"
     id: button_event
     device_class: button
-    # These are the specific event types HA will recognize
     event_types:
       - single_press
       - double_press
       - long_press
 
 # ====================
-# SENSORS
+# LIGHT SENSOR
 # ====================
 sensor:
-  # VEML7700
   - platform: veml7700
     address: 0x10
     update_interval: 30s
-
     ambient_light:
       name: "Ambient Light (Lux)"
-
     full_spectrum:
       name: "Full Spectrum Light"
-
     infrared:
       name: "Infrared Light"
-
     actual_gain:
       name: "VEML7700 Gain"
-
     actual_integration_time:
       name: "VEML7700 Integration Time"
 
+# ====================
+# MOTION ENABLE SWITCH (HA)
+# ====================
+switch:
+  - platform: template
+    name: "Motion Enabled"
+    id: motion_enabled_switch
+    lambda: |-
+      return id(motion_enabled);
+    turn_on_action:
+      - globals.set: { id: motion_enabled, value: 'true' }
+    turn_off_action:
+      - globals.set: { id: motion_enabled, value: 'false' }
+      - binary_sensor.template.publish:
+          id: radar_presence
+          state: OFF
 
 # ====================
 # BINARY SENSORS
 # ====================
 binary_sensor:
-  # Presence via LD2420 D-OUT pin
-  - platform: gpio
-    pin:
-      number: GPIO7
-      mode: INPUT
+  - platform: template
+    id: radar_presence
     name: "Radar Presence"
     device_class: occupancy
+    lambda: |-
+      return id(motion_enabled) && digitalRead(7);
 
-  # Push button with multi-click support
+  # PUSH BUTTON
   - platform: gpio
     pin:
       number: GPIO3
       mode: INPUT_PULLUP
       inverted: true
-    name: "Push Button"
-    # Internal: true hides the raw "On/Off" state from HA so you only see the Events
     internal: true
-    
+    name: "Push Button"
+
     on_multi_click:
-      # Single Click
+
+      # SINGLE
       - timing:
           - ON for 50ms to 350ms
           - OFF for at least 200ms
@@ -128,7 +138,7 @@ binary_sensor:
               start_center_pulse();
           - logger.log: "Event Fired: Single Press"
 
-      # Double Click
+      # DOUBLE
       - timing:
           - ON for 50ms to 350ms
           - OFF for 50ms to 350ms
@@ -141,13 +151,38 @@ binary_sensor:
               start_center_pulse_double_press();
           - logger.log: "Event Fired: Double Press"
 
-      # Long Press
+      # LONG  ← YOUR TOGGLE
       - timing:
           - ON for at least 500ms
         then:
+
+          # toggle stored state
+          - globals.set:
+              id: motion_enabled
+              value: !lambda 'return !id(motion_enabled);'
+
+          # if disabled → force radar OFF
+          - if:
+              condition:
+                lambda: 'return !id(motion_enabled);'
+              then:
+                - binary_sensor.template.publish:
+                    id: radar_presence
+                    state: OFF
+
+          # fire HA event
           - event.trigger:
               id: button_event
               event_type: long_press
+
+          # LED feedback
           - lambda: |-
-              start_center_pulse_long_press();
-          - logger.log: "Event Fired: Long Press"
+              if (id(motion_enabled)) {
+                start_center_pulse_long_press();
+              } else {
+                start_center_pulse_long_press_disabled();
+              }
+
+          - logger.log:
+              format: "Motion Enabled now: %s"
+              args: ['id(motion_enabled) ? "TRUE" : "FALSE"']

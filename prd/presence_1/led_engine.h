@@ -69,10 +69,16 @@ void start_center_pulse_double_press() {
   start_center_pulse(&cyan, 1);
 }
 
-// Same wave animation, different color for long press (magenta)
+// Same wave animation, green for long press when motion enabled
 void start_center_pulse_long_press() {
-  static const RgbColor magenta(255, 0, 255);
-  start_center_pulse(&magenta, 1);
+  static const RgbColor green(0, 255, 0);
+  start_center_pulse(&green, 1);
+}
+
+// Same wave animation, red for long press when motion disabled
+void start_center_pulse_long_press_disabled() {
+  static const RgbColor red(255, 0, 0);
+  start_center_pulse(&red, 1);
 }
 
 void led_engine_setup() {
