@@ -64,8 +64,8 @@ void led_play_center_wave(const RgbColor* colors, int num_colors) {
 }
 
 void led_play_feedback_double() {
-  static const RgbColor cyan(0, 255, 255);
-  led_play_center_wave(&cyan, 1);
+  static const RgbColor magenta(255, 0, 255);
+  led_play_center_wave(&magenta, 1);
 }
 
 void led_play_feedback_motion_on() {
@@ -140,7 +140,7 @@ void led_tick() {
     case BOOT: {
       // Smooth fill: progress 0..5 sweeps left to right with per-LED fade-in
       const int total_frames = 40;
-      const RgbColor boot_color(60, 80, 120);
+      const RgbColor boot_color(255, 255, 255);
 
       if (frame >= total_frames) {
         current_mode = BOOT_FADE_OUT;
@@ -170,7 +170,7 @@ void led_tick() {
 
     case BOOT_FADE_OUT: {
         const int fade_frames = 30;
-        const RgbColor boot_color(60, 80, 120);
+        const RgbColor boot_color(255, 255, 255);
       
         unsigned long now = millis();
         if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
