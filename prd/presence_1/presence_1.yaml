@@ -9,6 +9,7 @@ esphome:
   on_boot:
     priority: 600
     then:
+      - globals.set: { id: motion_enabled, value: 'true' }
       - lambda: |-
           led_engine_setup();
           start_boot_animation();
