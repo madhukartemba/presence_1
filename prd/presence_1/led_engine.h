@@ -47,7 +47,7 @@ void start_wifi_failure_animation() {
   frame = 0;
 }
 
-void start_center_pulse() {
+void start_center_pulse_single_press() {
   current_mode = CENTER_PULSE;
   frame = 0;
   pulse_color_count = 1;

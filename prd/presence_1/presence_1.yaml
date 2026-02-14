@@ -136,7 +136,7 @@ binary_sensor:
               id: button_event
               event_type: single_press
           - lambda: |-
-              start_center_pulse();
+              start_center_pulse_single_press();
           - logger.log: "Event Fired: Single Press"
 
       # DOUBLE
