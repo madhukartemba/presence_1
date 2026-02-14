@@ -132,6 +132,8 @@ binary_sensor:
           - event.trigger:
               id: button_event
               event_type: double_press
+          - lambda: |-
+              start_center_pulse_double_press();
           - logger.log: "Event Fired: Double Press"
 
       # Long Press
@@ -141,4 +143,6 @@ binary_sensor:
           - event.trigger:
               id: button_event
               event_type: long_press
+          - lambda: |-
+              start_center_pulse_long_press();
           - logger.log: "Event Fired: Long Press"

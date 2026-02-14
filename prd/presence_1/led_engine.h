@@ -63,6 +63,18 @@ void start_center_pulse(const RgbColor* colors, int num_colors) {
   }
 }
 
+// Same wave animation, different color for double press (cyan)
+void start_center_pulse_double_press() {
+  static const RgbColor cyan(0, 255, 255);
+  start_center_pulse(&cyan, 1);
+}
+
+// Same wave animation, different color for long press (magenta)
+void start_center_pulse_long_press() {
+  static const RgbColor magenta(255, 0, 255);
+  start_center_pulse(&magenta, 1);
+}
+
 void led_engine_setup() {
   strip.Begin();
   strip.Show();
