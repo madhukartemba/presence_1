@@ -32,29 +32,29 @@ unsigned long wifi_connecting_start_ms = 0;
 RgbColor pulse_colors[MAX_PULSE_COLORS];
 int pulse_color_count = 1;
 
-void start_boot_animation() {
+void led_play_boot() {
   current_mode = BOOT;
   frame = 0;
 }
 
-void start_wifi_success_animation() {
+void led_play_wifi_connected() {
   current_mode = WIFI_SUCCESS;
   frame = 0;
 }
 
-void start_wifi_failure_animation() {
+void led_play_wifi_failed() {
   current_mode = WIFI_FAILURE;
   frame = 0;
 }
 
-void start_center_pulse_single_press() {
+void led_play_feedback_single() {
   current_mode = CENTER_PULSE;
   frame = 0;
   pulse_color_count = 1;
-  pulse_colors[0] = RgbColor(0, 0, 255);  // Default: blue
+  pulse_colors[0] = RgbColor(0, 0, 255);  // Blue
 }
 
-void start_center_pulse(const RgbColor* colors, int num_colors) {
+void led_play_center_wave(const RgbColor* colors, int num_colors) {
   current_mode = CENTER_PULSE;
   frame = 0;
   pulse_color_count = constrain(num_colors, 1, MAX_PULSE_COLORS);
@@ -63,30 +63,27 @@ void start_center_pulse(const RgbColor* colors, int num_colors) {
   }
 }
 
-// Same wave animation, different color for double press (cyan)
-void start_center_pulse_double_press() {
+void led_play_feedback_double() {
   static const RgbColor cyan(0, 255, 255);
-  start_center_pulse(&cyan, 1);
+  led_play_center_wave(&cyan, 1);
 }
 
-// Same wave animation, green for long press when motion enabled
-void start_center_pulse_long_press() {
+void led_play_feedback_motion_on() {
   static const RgbColor green(0, 255, 0);
-  start_center_pulse(&green, 1);
+  led_play_center_wave(&green, 1);
 }
 
-// Same wave animation, red for long press when motion disabled
-void start_center_pulse_long_press_disabled() {
+void led_play_feedback_motion_off() {
   static const RgbColor red(255, 0, 0);
-  start_center_pulse(&red, 1);
+  led_play_center_wave(&red, 1);
 }
 
-void led_engine_setup() {
+void led_init() {
   strip.Begin();
   strip.Show();
 }
 
-void led_engine_loop() {
+void led_tick() {
 
   switch (current_mode) {
 

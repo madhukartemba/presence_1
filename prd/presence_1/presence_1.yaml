@@ -11,8 +11,8 @@ esphome:
     then:
       - globals.set: { id: motion_enabled, value: 'true' }
       - lambda: |-
-          led_engine_setup();
-          start_boot_animation();
+          led_init();
+          led_play_boot();
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -46,7 +46,7 @@ interval:
   - interval: 16ms
     then:
       - lambda: |-
-          led_engine_loop();
+          led_tick();
 
 # --------------------
 # I2C
@@ -101,7 +101,7 @@ switch:
       - globals.set: { id: motion_enabled, value: 'true' }
       - lambda: |-
           // Optional: LED feedback when motion enabled via HA
-          start_center_pulse_long_press();
+          led_play_feedback_motion_on();
     turn_off_action:
       - globals.set: { id: motion_enabled, value: 'false' }
       - binary_sensor.template.publish:
@@ -109,7 +109,7 @@ switch:
           state: OFF
       - lambda: |-
           // LED feedback when motion disabled via HA
-          start_center_pulse_long_press_disabled();
+          led_play_feedback_motion_off();
 
 
 # ====================
@@ -143,7 +143,7 @@ binary_sensor:
               id: button_event
               event_type: single_press
           - lambda: |-
-              start_center_pulse_single_press();
+              led_play_feedback_single();
           - logger.log: "Event Fired: Single Press"
 
       # DOUBLE
@@ -156,7 +156,7 @@ binary_sensor:
               id: button_event
               event_type: double_press
           - lambda: |-
-              start_center_pulse_double_press();
+              led_play_feedback_double();
           - logger.log: "Event Fired: Double Press"
 
       # LONG  ← YOUR TOGGLE
@@ -186,9 +186,9 @@ binary_sensor:
           # LED feedback
           - lambda: |-
               if (id(motion_enabled)) {
-                start_center_pulse_long_press();
+                led_play_feedback_motion_on();
               } else {
-                start_center_pulse_long_press_disabled();
+                led_play_feedback_motion_off();
               }
 
           - logger.log:
