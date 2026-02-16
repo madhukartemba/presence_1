@@ -28,6 +28,10 @@ max: 10
 trigger:
   - platform: state
     entity_id: !input button_entity
+    # FIX: Ignore triggers caused by the device rebooting/connecting
+    not_from:
+      - "unavailable"
+      - "unknown"
 
 action:
   - choose:
