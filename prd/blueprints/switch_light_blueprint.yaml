@@ -3,7 +3,7 @@ blueprint:
   description: >
     Controls multiple lights using an ESPhome button event.
     Single press toggles lights.
-    Double press toggles color temperature between 200 mireds and max.
+    Double press toggles color temperature between user-defined mired values.
     (Uses the first selected light as the reference for the current state).
   domain: automation
 
@@ -14,6 +14,7 @@ blueprint:
       selector:
         entity:
           domain: event
+
     light_entities:
       name: Light Entities
       description: The lights to control
@@ -22,19 +23,42 @@ blueprint:
           domain: light
           multiple: true
 
+    min_mired:
+      name: Warm Color Temp (mired)
+      description: Lower mired value (example 200)
+      default: 200
+      selector:
+        number:
+          min: 150
+          max: 500
+          step: 1
+          mode: box
+
+    max_mired:
+      name: Cool Color Temp (mired)
+      description: Upper mired value (example 300)
+      default: 300
+      selector:
+        number:
+          min: 150
+          max: 500
+          step: 1
+          mode: box
+
+
 mode: queued
 max: 10
 
 trigger:
   - platform: state
     entity_id: !input button_entity
-    # FIX: Ignore triggers caused by the device rebooting/connecting
     not_from:
       - "unavailable"
       - "unknown"
 
 action:
   - choose:
+
       # SINGLE PRESS -> toggle all lights
       - conditions:
           - condition: state
@@ -46,6 +70,7 @@ action:
             target:
               entity_id: !input light_entities
 
+
       # DOUBLE PRESS -> toggle color temperature
       - conditions:
           - condition: state
@@ -53,33 +78,31 @@ action:
             attribute: event_type
             state: double_press
         sequence:
-          # We import the lights input into a variable named 'lights'
+
           - variables:
               lights: !input light_entities
-          
+              min_ct: !input min_mired
+              max_ct_user: !input max_mired
+
           - service: light.turn_on
             target:
               entity_id: !input light_entities
             data:
               transition: 1
               color_temp: >
-                {# Normalize list #}
+
                 {% set entity_list = lights if lights is iterable and lights is not string else [lights] %}
 
-                {# Keep only ONLINE lights first (critical fix) #}
                 {% set online = expand(entity_list)
                   | rejectattr('state','in',['unavailable','unknown'])
                   | map(attribute='entity_id')
                   | list %}
 
-                {# If at least one online light exists #}
                 {% if online | length > 0 %}
 
                   {% set ref = online[0] %}
-
-                  {% set current = state_attr(ref,'color_temp') | int(200) %}
-                  {% set min_ct = 200 %}
-                  {% set max_ct = [300, state_attr(ref,'max_mireds') | int(370)] | min %}
+                  {% set current = state_attr(ref,'color_temp') | int(min_ct) %}
+                  {% set max_ct = [max_ct_user, state_attr(ref,'max_mireds') | int(max_ct_user)] | min %}
 
                   {% if current <= min_ct + 5 %}
                     {{ max_ct }}
@@ -88,5 +111,5 @@ action:
                   {% endif %}
 
                 {% else %}
-                  300
+                  {{ max_ct_user }}
                 {% endif %}
