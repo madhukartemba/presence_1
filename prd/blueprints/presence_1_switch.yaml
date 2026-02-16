@@ -89,8 +89,7 @@ action:
               entity_id: !input light_entities
             data:
               transition: 1
-              color_temp: >
-
+              color_temp_kelvin: >
                 {% set entity_list = lights if lights is iterable and lights is not string else [lights] %}
 
                 {% set online = expand(entity_list)
@@ -98,18 +97,26 @@ action:
                   | map(attribute='entity_id')
                   | list %}
 
+                {% set min_k = (1000000 / min_ct) | int %}
+                {% set max_user_k = (1000000 / max_ct_user) | int %}
+
                 {% if online | length > 0 %}
 
                   {% set ref = online[0] %}
-                  {% set current = state_attr(ref,'color_temp') | int(min_ct) %}
-                  {% set max_ct = [max_ct_user, state_attr(ref,'max_mireds') | int(max_ct_user)] | min %}
+                  {% set current_m = state_attr(ref,'color_temp') | int(min_ct) %}
+                  {% set current_k = (1000000 / current_m) | int %}
 
-                  {% if current <= min_ct + 5 %}
-                    {{ max_ct }}
+                  {% set max_mired_supported = state_attr(ref,'max_mireds') | int(max_ct_user) %}
+                  {% set max_supported_k = (1000000 / max_mired_supported) | int %}
+
+                  {% set target_max_k = [max_user_k, max_supported_k] | max %}
+
+                  {% if current_k >= min_k - 200 %}
+                    {{ target_max_k }}
                   {% else %}
-                    {{ min_ct }}
+                    {{ min_k }}
                   {% endif %}
 
                 {% else %}
-                  {{ max_ct_user }}
+                  {{ max_user_k }}
                 {% endif %}
