@@ -63,29 +63,23 @@ action:
             data:
               transition: 1
               color_temp: >
-                {# Normalize input to list #}
+                {# Normalize list #}
                 {% set entity_list = lights if lights is iterable and lights is not string else [lights] %}
 
-                {# Find first light that actually has color_temp support #}
-                {% set ref = namespace(entity=None) %}
-                {% for e in entity_list %}
-                  {% if state_attr(e,'color_temp') is not none
-                        or state_attr(e,'min_mireds') is not none
-                        or state_attr(e,'max_mireds') is not none %}
-                    {% set ref.entity = e %}
-                    {% break %}
-                  {% endif %}
-                {% endfor %}
+                {# Keep only ONLINE lights first (critical fix) #}
+                {% set online = expand(entity_list)
+                  | rejectattr('state','in',['unavailable','unknown'])
+                  | map(attribute='entity_id')
+                  | list %}
 
-                {# If we found a valid reference light #}
-                {% if ref.entity %}
+                {# If at least one online light exists #}
+                {% if online | length > 0 %}
 
-                  {% set current = state_attr(ref.entity,'color_temp') | int(default=200) %}
+                  {% set ref = online[0] %}
+
+                  {% set current = state_attr(ref,'color_temp') | int(200) %}
                   {% set min_ct = 200 %}
-
-                  {# Warm target = min(300 , ref.max_mireds) OR 300 if missing #}
-                  {% set ref_max = state_attr(ref.entity,'max_mireds') | int(default=300) %}
-                  {% set max_ct = [300, ref_max] | min %}
+                  {% set max_ct = [300, state_attr(ref,'max_mireds') | int(370)] | min %}
 
                   {% if current <= min_ct + 5 %}
                     {{ max_ct }}
