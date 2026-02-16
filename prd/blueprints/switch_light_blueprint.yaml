@@ -63,20 +63,36 @@ action:
             data:
               transition: 1
               color_temp: >
-                {# 1. Handle the input whether it is a single string or a list #}
+                {# Normalize input to list #}
                 {% set entity_list = lights if lights is iterable and lights is not string else [lights] %}
-                
-                {# 2. Pick the first light as the reference to check current state #}
-                {% set ref_entity = entity_list[0] %}
 
-                {# 3. Get attributes from the reference light #}
-                {% set current = state_attr(ref_entity, 'color_temp') | int(default=200) %}
-                {% set min_ct = 200 %}
-                {% set max_ct = state_attr(ref_entity, 'max_mireds') | int(default=500) %}
-                
-                {# 4. Decide logic based on reference light #}
-                {% if current <= min_ct + 5 %}
-                  {{ max_ct }}
+                {# Find first light that actually has color_temp support #}
+                {% set ref = namespace(entity=None) %}
+                {% for e in entity_list %}
+                  {% if state_attr(e,'color_temp') is not none
+                        or state_attr(e,'min_mireds') is not none
+                        or state_attr(e,'max_mireds') is not none %}
+                    {% set ref.entity = e %}
+                    {% break %}
+                  {% endif %}
+                {% endfor %}
+
+                {# If we found a valid reference light #}
+                {% if ref.entity %}
+
+                  {% set current = state_attr(ref.entity,'color_temp') | int(default=200) %}
+                  {% set min_ct = 200 %}
+
+                  {# Warm target = min(300 , ref.max_mireds) OR 300 if missing #}
+                  {% set ref_max = state_attr(ref.entity,'max_mireds') | int(default=300) %}
+                  {% set max_ct = [300, ref_max] | min %}
+
+                  {% if current <= min_ct + 5 %}
+                    {{ max_ct }}
+                  {% else %}
+                    {{ min_ct }}
+                  {% endif %}
+
                 {% else %}
-                  {{ min_ct }}
+                  300
                 {% endif %}
