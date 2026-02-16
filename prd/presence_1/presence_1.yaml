@@ -57,6 +57,25 @@ i2c:
   scan: true
   frequency: 100kHz
 
+# --------------------
+# UART for LD2420
+# --------------------
+uart:
+  id: uart_mmwave
+  tx_pin: GPIO4
+  rx_pin: GPIO5
+  baud_rate: 115200
+  parity: NONE
+  stop_bits: 1
+
+
+ld2420:
+
+text_sensor:
+  - platform: ld2420
+    fw_version:
+      name: "LD2420 Firmware Version"
+
 # ====================
 # EVENT ENTITY
 # ====================
@@ -74,9 +93,12 @@ event:
 # LIGHT SENSOR
 # ====================
 sensor:
+  - platform: ld2420
+    moving_distance:
+      name : Moving Distance
   - platform: veml7700
     address: 0x10
-    update_interval: 30s
+    update_interval: 3s
     ambient_light:
       name: "Ambient Light (Lux)"
     full_spectrum:
@@ -116,6 +138,12 @@ switch:
 # BINARY SENSORS
 # ====================
 binary_sensor:
+  # UART Presence
+  - platform: ld2420
+    has_target:
+      name: Occupancy
+
+  # GPIO Presence
   - platform: template
     id: radar_presence
     name: "Radar Presence"
@@ -194,3 +222,34 @@ binary_sensor:
           - logger.log:
               format: "Motion Enabled now: %s"
               args: ['id(motion_enabled) ? "TRUE" : "FALSE"']
+
+select:
+  - platform: ld2420
+    operating_mode:
+      name: Operating Mode
+
+number:
+  - platform: ld2420
+    presence_timeout:
+      name: Detection Presence Timeout
+    min_gate_distance:
+      name: Detection Gate Minimum
+    max_gate_distance:
+      name: Detection Gate Maximum
+    gate_select:
+      name: Select Gate to Set
+    still_threshold:
+      name: Set Still Threshold Value
+    move_threshold:
+      name: Set Move Threshold Value
+
+button:
+  - platform: ld2420
+    apply_config:
+      name: Apply Config
+    factory_reset:
+      name: Factory Reset
+    restart_module:
+      name: Restart Module
+    revert_config:
+      name: Undo Edits
