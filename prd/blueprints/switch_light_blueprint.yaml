@@ -1,5 +1,5 @@
 blueprint:
-  name: ESPhome Button Light Controller (Multi-Light)
+  name: Presence 1 Switch
   description: >
     Controls multiple lights using an ESPhome button event.
     Single press toggles lights.
