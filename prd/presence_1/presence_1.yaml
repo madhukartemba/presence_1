@@ -36,6 +36,10 @@ wifi:
 
 captive_portal:
 
+# Enables Home Assistant Bluetooth Proxy
+bluetooth_proxy:
+  active: true
+
 globals:
   - id: motion_enabled
     type: bool
