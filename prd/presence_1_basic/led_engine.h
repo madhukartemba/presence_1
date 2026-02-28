@@ -1,6 +1,9 @@
+#pragma once
+
 #include "esphome.h"
 #include "esphome/components/network/util.h"
-#include <NeoPixelBus.h>
+#include <LiteLED.h>
+#include <cmath> // Added for expf, pow, etc.
 
 using namespace esphome;
 
@@ -11,7 +14,8 @@ using namespace esphome;
 #define BOOT_WIFI_FRAME_INTERVAL_MS 32
 #define WIFI_CONNECT_TIMEOUT_MS 70000
 
-NeoPixelBus<NeoGrbFeature, NeoEsp32Rmt0800KbpsMethod> strip(LED_COUNT, LED_PIN);
+// Create strip properly for LiteLED v3
+LiteLED strip(LED_STRIP_WS2812, false);
 
 enum AnimationMode {
   IDLE,
@@ -24,127 +28,136 @@ enum AnimationMode {
 };
 
 AnimationMode current_mode = IDLE;
+
 int frame = 0;
 unsigned long last_frame_ms = 0;
 unsigned long wifi_connecting_start_ms = 0;
 
-// Stored colors for center pulse (supports multiple)
-RgbColor pulse_colors[MAX_PULSE_COLORS];
+struct LedColor {
+  uint8_t r, g, b;
+};
+
+LedColor pulse_colors[MAX_PULSE_COLORS];
 int pulse_color_count = 1;
+
+inline void reset_timing() {
+  frame = 0;
+  last_frame_ms = 0;
+}
+
+inline void show() {
+  strip.show();
+}
+
+inline void clear() {
+  strip.clear();
+}
+
+inline void setPixel(int i, uint8_t r, uint8_t g, uint8_t b) {
+  rgb_t c = { r, g, b };   // Standard RGB order
+  strip.setPixel(i, c, false);
+}
+
+void led_init() {
+  strip.begin(LED_PIN, LED_COUNT);
+  clear();
+  show();
+}
 
 void led_play_boot() {
   current_mode = BOOT;
-  frame = 0;
+  reset_timing();
 }
 
 void led_play_wifi_connected() {
   current_mode = WIFI_SUCCESS;
-  frame = 0;
+  reset_timing();
 }
 
 void led_play_wifi_failed() {
   current_mode = WIFI_FAILURE;
-  frame = 0;
+  reset_timing();
 }
 
-void led_play_feedback_single() {
+void led_play_center_wave(const LedColor* colors, int num_colors) {
   current_mode = CENTER_PULSE;
-  frame = 0;
-  pulse_color_count = 1;
-  pulse_colors[0] = RgbColor(0, 0, 255);  // Blue
-}
-
-void led_play_center_wave(const RgbColor* colors, int num_colors) {
-  current_mode = CENTER_PULSE;
-  frame = 0;
+  reset_timing();
   pulse_color_count = constrain(num_colors, 1, MAX_PULSE_COLORS);
   for (int i = 0; i < pulse_color_count; i++) {
     pulse_colors[i] = colors[i];
   }
 }
 
+void led_play_feedback_single() {
+  LedColor blue = {0, 0, 255};
+  led_play_center_wave(&blue, 1);
+}
+
 void led_play_feedback_double() {
-  static const RgbColor magenta(255, 0, 255);
+  static const LedColor magenta = {255, 0, 255};
   led_play_center_wave(&magenta, 1);
 }
 
 void led_play_feedback_motion_on() {
-  static const RgbColor green(0, 255, 0);
+  static const LedColor green = {0, 255, 0};
   led_play_center_wave(&green, 1);
 }
 
 void led_play_feedback_motion_off() {
-  static const RgbColor red(255, 0, 0);
+  static const LedColor red = {255, 0, 0};
   led_play_center_wave(&red, 1);
 }
 
-void led_init() {
-  strip.Begin();
-  strip.Show();
-}
-
 void led_tick() {
-
   switch (current_mode) {
 
     case CENTER_PULSE: {
       const int total_frames = 80;
-      const int center = 2;
+      const int center = 2; // Middle LED for a 5-LED strip
 
       if (frame >= total_frames) {
-        strip.ClearTo(RgbColor(0,0,0));
-        strip.Show();
+        clear(); show();
         current_mode = IDLE;
         return;
       }
 
-      // Throttle: only advance frame after PULSE_FRAME_INTERVAL_MS
       unsigned long now = millis();
-      if (now - last_frame_ms < PULSE_FRAME_INTERVAL_MS) {
-        return;
-      }
+      if (now - last_frame_ms < PULSE_FRAME_INTERVAL_MS) return;
       last_frame_ms = now;
 
-      strip.ClearTo(RgbColor(0,0,0));
+      clear();
 
       float wave_position = frame * 0.08f;
       float width = 0.8f;
 
-      // Fade-in: ease-in over first ~20 frames so center doesn't appear abruptly
       const int fade_in_frames = 20;
       float fade_in = frame < fade_in_frames
-        ? pow((float)frame / fade_in_frames, 2.0f)  // quadratic ease-in
+        ? pow((float)frame / fade_in_frames, 2.0f)
         : 1.0f;
 
-      // Cycle through colors over the animation duration
       int color_idx = (frame * pulse_color_count) / total_frames % pulse_color_count;
-      RgbColor base = pulse_colors[color_idx];
+      LedColor base = pulse_colors[color_idx];
 
       for (int i = 0; i < LED_COUNT; i++) {
         float distance = abs(i - center);
         float intensity = exp(-pow(distance - wave_position, 2) / width);
         intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
 
-        strip.SetPixelColor(i, RgbColor(
-          base.R * intensity,
-          base.G * intensity,
-          base.B * intensity
-        ));
+        setPixel(i, base.r * intensity, base.g * intensity, base.b * intensity);
       }
 
-      strip.Show();
+      show();
       frame++;
       break;
     }
 
     case BOOT: {
-      // Smooth fill: progress 0..5 sweeps left to right with per-LED fade-in
       const int total_frames = 40;
-      const RgbColor boot_color(255, 255, 255);
+      const LedColor boot_color = {255, 255, 255};
 
       if (frame >= total_frames) {
         current_mode = BOOT_FADE_OUT;
-        frame = 0;
+        reset_timing();
         return;
       }
 
@@ -152,112 +165,91 @@ void led_tick() {
       if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
       last_frame_ms = now;
 
-      strip.ClearTo(RgbColor(0,0,0));
+      clear();
       float progress = (float)frame * (LED_COUNT + 0.8f) / total_frames;
       for (int i = 0; i < LED_COUNT; i++) {
         float t = progress - (float)i;
         float intensity = t <= 0.0f ? 0.0f : (t >= 1.0f ? 1.0f : t * t * (3.0f - 2.0f * t));
-        strip.SetPixelColor(i, RgbColor(
-          (uint8_t)(boot_color.R * intensity),
-          (uint8_t)(boot_color.G * intensity),
-          (uint8_t)(boot_color.B * intensity)
-        ));
+        setPixel(i, boot_color.r * intensity, boot_color.g * intensity, boot_color.b * intensity);
       }
-      strip.Show();
+      show();
       frame++;
       break;
     }
 
     case BOOT_FADE_OUT: {
-        const int fade_frames = 30;
-        const RgbColor boot_color(255, 255, 255);
-      
-        unsigned long now = millis();
-        if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
-        last_frame_ms = now;
-      
-        if (frame >= fade_frames) {
-          strip.ClearTo(RgbColor(0, 0, 0));
-          strip.Show();
-          current_mode = WIFI_CONNECTING;
-          frame = 0;
-          wifi_connecting_start_ms = millis();
-          return;
-        }
-      
-        // Smooth fade from 1.0 → 0.0
-        float fade = 1.0f - ((float)frame / (float)(fade_frames - 1));
-      
-        // Smooth ease-out
-        fade = fade * fade;
-      
-        for (int i = 0; i < LED_COUNT; i++) {
-          strip.SetPixelColor(i, RgbColor(
-            (uint8_t)(boot_color.R * fade),
-            (uint8_t)(boot_color.G * fade),
-            (uint8_t)(boot_color.B * fade)
-          ));
-        }
-      
-        strip.Show();
-        frame++;
-        break;
+      const int fade_frames = 30;
+      const LedColor boot_color = {255, 255, 255};
+    
+      unsigned long now = millis();
+      if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
+      last_frame_ms = now;
+    
+      if (frame >= fade_frames) {
+        clear(); show();
+        current_mode = WIFI_CONNECTING;
+        reset_timing();
+        wifi_connecting_start_ms = millis();
+        return;
       }
-      
+    
+      float fade = 1.0f - ((float)frame / (float)(fade_frames - 1));
+      fade = fade * fade; // Smooth ease-out
+    
+      for (int i = 0; i < LED_COUNT; i++) {
+        setPixel(i, boot_color.r * fade, boot_color.g * fade, boot_color.b * fade);
+      }
+    
+      show();
+      frame++;
+      break;
+    }
 
     case WIFI_CONNECTING: {
-      // Fade in from black, then wave traveling left-right (blue crest)
       unsigned long now = millis();
       if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
       last_frame_ms = now;
 
       if (network::is_connected()) {
         current_mode = WIFI_SUCCESS;
-        frame = 0;
+        reset_timing();
         return;
       }
       if (now - wifi_connecting_start_ms > WIFI_CONNECT_TIMEOUT_MS) {
         current_mode = WIFI_FAILURE;
-        frame = 0;
+        reset_timing();
         return;
       }
 
-      strip.ClearTo(RgbColor(0,0,0));
-      const RgbColor wave_color(0, 0, 255);
+      clear();
+      const LedColor wave_color = {0, 0, 255};
       const float wave_width = 1.2f;
       const int cycle = 32;
       const int fade_in_frames = 12;
-      float fade_in = frame < fade_in_frames
-        ? (float)frame / (float)fade_in_frames
-        : 1.0f;
+      
+      float fade_in = frame < fade_in_frames ? (float)frame / (float)fade_in_frames : 1.0f;
       fade_in = fade_in * fade_in * (3.0f - 2.0f * fade_in);
+      
       int step = frame % cycle;
-      float wave_pos = step < cycle / 2
-        ? (float)step * 0.25f
-        : (float)(cycle - step) * 0.25f;
+      float wave_pos = step < cycle / 2 ? (float)step * 0.25f : (float)(cycle - step) * 0.25f;
+      
       for (int i = 0; i < LED_COUNT; i++) {
         float d = (float)i - wave_pos;
         float intensity = expf(-d * d / (wave_width * wave_width));
         intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
-        strip.SetPixelColor(i, RgbColor(
-          (uint8_t)(wave_color.R * intensity),
-          (uint8_t)(wave_color.G * intensity),
-          (uint8_t)(wave_color.B * intensity)
-        ));
+        setPixel(i, wave_color.r * intensity, wave_color.g * intensity, wave_color.b * intensity);
       }
-      strip.Show();
+      show();
       frame++;
       break;
     }
 
     case WIFI_SUCCESS: {
-      // Smooth green sweep with soft falloff then fade out
       const int total_frames = 35;
-      const RgbColor success_color(0, 255, 0);
+      const LedColor success_color = {0, 255, 0};
 
       if (frame >= total_frames) {
-        strip.ClearTo(RgbColor(0,0,0));
-        strip.Show();
+        clear(); show();
         current_mode = IDLE;
         return;
       }
@@ -266,33 +258,28 @@ void led_tick() {
       if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
       last_frame_ms = now;
 
-      strip.ClearTo(RgbColor(0,0,0));
+      clear();
       float sweep = (float)frame * (LED_COUNT + 1.5f) / (total_frames - 8);
       float fade_out = frame < total_frames - 10 ? 1.0f : 1.0f - (float)(frame - (total_frames - 10)) / 10.0f;
       fade_out = fade_out * fade_out;
+      
       for (int i = 0; i < LED_COUNT; i++) {
         float t = sweep - (float)i;
         float intensity = t <= 0.0f ? 0.0f : (t >= 1.2f ? 1.0f : (t >= 1.0f ? 1.0f : t * (2.0f - t)));
         intensity *= fade_out;
-        strip.SetPixelColor(i, RgbColor(
-          (uint8_t)(success_color.R * intensity),
-          (uint8_t)(success_color.G * intensity),
-          (uint8_t)(success_color.B * intensity)
-        ));
+        setPixel(i, success_color.r * intensity, success_color.g * intensity, success_color.b * intensity);
       }
-      strip.Show();
+      show();
       frame++;
       break;
     }
 
     case WIFI_FAILURE: {
-      // Smooth red pulse twice then fade out
       const int total_frames = 48;
-      const RgbColor fail_color(255, 0, 30);
+      const LedColor fail_color = {255, 0, 30};
 
       if (frame >= total_frames) {
-        strip.ClearTo(RgbColor(0,0,0));
-        strip.Show();
+        clear(); show();
         current_mode = IDLE;
         return;
       }
@@ -301,20 +288,19 @@ void led_tick() {
       if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
       last_frame_ms = now;
 
-      strip.ClearTo(RgbColor(0,0,0));
+      clear();
       float pulse_phase = (float)(frame % 12) / 6.0f;
       if (pulse_phase > 1.0f) pulse_phase = 2.0f - pulse_phase;
+      
       float blink = pulse_phase * pulse_phase * (3.0f - 2.0f * pulse_phase);
       blink = 0.15f + 0.85f * blink;
+      
       if (frame >= total_frames - 12) blink *= 1.0f - (float)(frame - (total_frames - 12)) / 12.0f;
+      
       for (int i = 0; i < LED_COUNT; i++) {
-        strip.SetPixelColor(i, RgbColor(
-          (uint8_t)(fail_color.R * blink),
-          (uint8_t)(fail_color.G * blink),
-          (uint8_t)(fail_color.B * blink)
-        ));
+        setPixel(i, fail_color.r * blink, fail_color.g * blink, fail_color.b * blink);
       }
-      strip.Show();
+      show();
       frame++;
       break;
     }
