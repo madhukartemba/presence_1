@@ -43,7 +43,7 @@ globals:
     initial_value: 'true'
 
 interval:
-  - interval: 16ms
+  - interval: 12ms
     then:
       - lambda: |-
           led_tick();
