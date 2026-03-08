@@ -30,6 +30,7 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  power_save_mode: none
   ap:
     ssid: "PresenceNode_${device_id}_Setup"
     password: ""
@@ -40,6 +41,65 @@ captive_portal:
 bluetooth_proxy:
   active: true
 
+espnow:
+  auto_add_peer: true
+  
+  # 1. CATCH THE FALLBACK BROADCAST SWEEP
+  on_broadcast:
+    then:
+      - lambda: |-
+          struct __attribute__((packed)) ButtonMessage {
+            uint8_t button_id;
+            uint8_t action;
+            uint32_t counter;
+          };
+          struct __attribute__((packed)) AckMessage {
+            uint32_t counter;
+            bool success;
+          };
+
+          if (size == sizeof(ButtonMessage)) {
+            auto msg = (const ButtonMessage *)data;
+            ESP_LOGI("espnow_debug", "BROADCAST: Button %d Pressed! Counter: %lu", msg->button_id, msg->counter);
+            
+            // Trigger your Home Assistant Event
+            // if (msg->button_id == 1) { id(espnow_btn_1).trigger("single_press"); }
+            
+            AckMessage ack_msg;
+            ack_msg.counter = msg->counter;
+            ack_msg.success = true;
+            esp_err_t result = esp_now_send(info.src_addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
+            if (result == ESP_OK) ESP_LOGD("espnow_debug", "ACK fired back!");
+          }
+
+  # 2. CATCH THE TARGETED UNICAST (FAST PATH)
+  on_receive:
+    then:
+      - lambda: |-
+          struct __attribute__((packed)) ButtonMessage {
+            uint8_t button_id;
+            uint8_t action;
+            uint32_t counter;
+          };
+          struct __attribute__((packed)) AckMessage {
+            uint32_t counter;
+            bool success;
+          };
+
+          if (size == sizeof(ButtonMessage)) {
+            auto msg = (const ButtonMessage *)data;
+            ESP_LOGI("espnow_debug", "UNICAST: Button %d Pressed! Counter: %lu", msg->button_id, msg->counter);
+            
+            // Trigger your Home Assistant Event
+            // if (msg->button_id == 1) { id(espnow_btn_1).trigger("single_press"); }
+            
+            AckMessage ack_msg;
+            ack_msg.counter = msg->counter;
+            ack_msg.success = true;
+            esp_err_t result = esp_now_send(info.src_addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
+            if (result == ESP_OK) ESP_LOGD("espnow_debug", "ACK fired back!");
+          }
+          
 globals:
   - id: motion_enabled
     type: bool
