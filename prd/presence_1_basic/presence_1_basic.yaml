@@ -5,7 +5,7 @@ esphome:
     - led_engine.h
   platformio_options:
     lib_deps:
-      - Xylopyrographer/LiteLED
+      - Xylopyrographer/LiteLED@3.0.1
   on_boot:
     priority: 600
     then:
@@ -40,7 +40,6 @@ captive_portal:
 # Enables Home Assistant Bluetooth Proxy
 bluetooth_proxy:
   active: true
-
 espnow:
   auto_add_peer: true
   
@@ -48,56 +47,97 @@ espnow:
   on_broadcast:
     then:
       - lambda: |-
-          struct __attribute__((packed)) ButtonMessage {
-            uint8_t button_id;
-            uint8_t action;
+          // 1. Recreate the Enums to ensure memory alignment matches
+          enum MessageType { BUTTON_PRESS, BATTERY_STATUS };
+          enum PressEvent { SINGLE_PRESS, DOUBLE_PRESS, LONG_PRESS };
+          enum BatteryStatus { BATTERY_OK, BATTERY_LOW }; // Adjust to match your sender's enum if different
+          
+          // 2. Define the new, larger Message struct
+          struct __attribute__((packed)) Message {
             uint32_t counter;
+            int deviceId;
+            int entityId;
+            MessageType type;
+            union {
+              struct { PressEvent event; } buttonPress;
+              struct { int level; BatteryStatus status; } batteryLevel;
+            } data;
           };
+
+          // 3. Define the Ack struct
           struct __attribute__((packed)) AckMessage {
             uint32_t counter;
             bool success;
           };
 
-          if (size == sizeof(ButtonMessage)) {
-            auto msg = (const ButtonMessage *)data;
-            ESP_LOGI("espnow_debug", "BROADCAST: Button %d Pressed! Counter: %lu", msg->button_id, msg->counter);
+          // 4. Check for the new size
+          if (size == sizeof(Message)) {
+            auto msg = (const Message *)data;
             
-            // Trigger your Home Assistant Event
-            // if (msg->button_id == 1) { id(espnow_btn_1).trigger("single_press"); }
+            // Log the specific event data based on message type
+            if (msg->type == BUTTON_PRESS) {
+              ESP_LOGI("espnow_debug", "BROADCAST: Entity %d Pressed! Event: %d, Counter: %lu", 
+                       msg->entityId, msg->data.buttonPress.event, msg->counter);
+            }
+            
+            // Trigger your Home Assistant Event here if needed
+            // if (msg->entityId == 1) { id(espnow_btn_1).trigger("single_press"); }
             
             AckMessage ack_msg;
             ack_msg.counter = msg->counter;
             ack_msg.success = true;
             esp_err_t result = esp_now_send(info.src_addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
             if (result == ESP_OK) ESP_LOGD("espnow_debug", "ACK fired back!");
+          } else {
+            ESP_LOGD("espnow_debug", "Ignored packet of size %d (Expected %d)", size, sizeof(Message));
           }
 
   # 2. CATCH THE TARGETED UNICAST (FAST PATH)
   on_receive:
     then:
       - lambda: |-
-          struct __attribute__((packed)) ButtonMessage {
-            uint8_t button_id;
-            uint8_t action;
+          // 1. Recreate the Enums
+          enum MessageType { BUTTON_PRESS, BATTERY_STATUS };
+          enum PressEvent { SINGLE_PRESS, DOUBLE_PRESS, LONG_PRESS };
+          enum BatteryStatus { BATTERY_OK, BATTERY_LOW };
+          
+          // 2. Define the new, larger Message struct
+          struct __attribute__((packed)) Message {
             uint32_t counter;
+            int deviceId;
+            int entityId;
+            MessageType type;
+            union {
+              struct { PressEvent event; } buttonPress;
+              struct { int level; BatteryStatus status; } batteryLevel;
+            } data;
           };
+
+          // 3. Define the Ack struct
           struct __attribute__((packed)) AckMessage {
             uint32_t counter;
             bool success;
           };
 
-          if (size == sizeof(ButtonMessage)) {
-            auto msg = (const ButtonMessage *)data;
-            ESP_LOGI("espnow_debug", "UNICAST: Button %d Pressed! Counter: %lu", msg->button_id, msg->counter);
+          // 4. Check for the new size
+          if (size == sizeof(Message)) {
+            auto msg = (const Message *)data;
             
-            // Trigger your Home Assistant Event
-            // if (msg->button_id == 1) { id(espnow_btn_1).trigger("single_press"); }
+            // Log the specific event data
+            if (msg->type == BUTTON_PRESS) {
+              ESP_LOGI("espnow_debug", "UNICAST: Entity %d Pressed! Event: %d, Counter: %lu", 
+                       msg->entityId, msg->data.buttonPress.event, msg->counter);
+            }
+            
+            // Trigger your Home Assistant Event here if needed
             
             AckMessage ack_msg;
             ack_msg.counter = msg->counter;
             ack_msg.success = true;
             esp_err_t result = esp_now_send(info.src_addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
             if (result == ESP_OK) ESP_LOGD("espnow_debug", "ACK fired back!");
+          } else {
+            ESP_LOGD("espnow_debug", "Ignored packet of size %d (Expected %d)", size, sizeof(Message));
           }
           
 globals:
