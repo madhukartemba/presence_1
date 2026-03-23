@@ -37,6 +37,7 @@ std::string mac_to_str(const uint8_t *mac) {
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   return std::string(buf);
 }
+
 // Helper: Publish MQTT Discovery
 void publish_mqtt_discovery(const std::string& mac, int entity_id) {
     #ifdef USE_MQTT
@@ -44,7 +45,7 @@ void publish_mqtt_discovery(const std::string& mac, int entity_id) {
   
     std::string device_json = R"("device":{"identifiers":["esp_click_)" + mac + R"("],"name":"ESP Click )" + mac + R"(","manufacturer":"ESP Click Project"})";
   
-    // 1. DEVICE LEVEL (Battery) - Publish only once per MAC address
+    // 1. DEVICE LEVEL (Battery)
     if (std::find(discovered_macs.begin(), discovered_macs.end(), mac) == discovered_macs.end()) {
       ESP_LOGI("esp_click", "Publishing HA Discovery for Device Battery: %s", mac.c_str());
   
@@ -59,23 +60,23 @@ void publish_mqtt_discovery(const std::string& mac, int entity_id) {
       discovered_macs.push_back(mac);
     }
   
-    // 2. ENTITY LEVEL (Buttons) - Publish as a SENSOR instead of an EVENT
+    // 2. ENTITY LEVEL (Buttons) - Added force_update and expire_after
     std::string button_key = mac + "_" + std::to_string(entity_id);
     if (std::find(discovered_buttons.begin(), discovered_buttons.end(), button_key) == discovered_buttons.end()) {
       ESP_LOGI("esp_click", "Publishing HA Discovery for Button Sensor: %s (Entity %d)", mac.c_str(), entity_id);
   
-      // Changed /event/ to /sensor/ in the config topic
       std::string event_topic = "homeassistant/sensor/esp_click_" + mac + "/btn_" + std::to_string(entity_id) + "/config";
       
-      // Formatted as a standard sensor with an icon
-      std::string event_payload = R"({"name":"Button )" + std::to_string(entity_id) + R"(","state_topic":"esp_click/)" + mac + R"(/entity_)" + std::to_string(entity_id) + R"(/event","icon":"mdi:gesture-tap-button","unique_id":"esp_click_)" + mac + R"(_e)" + std::to_string(entity_id) + R"(_btn",)" + device_json + R"(})";
+      // Added "force_update":true and "expire_after":2
+      std::string event_payload = R"({"name":"Button )" + std::to_string(entity_id) + R"(","state_topic":"esp_click/)" + mac + R"(/entity_)" + std::to_string(entity_id) + R"(/event","icon":"mdi:gesture-tap-button","force_update":true,"expire_after":2,"unique_id":"esp_click_)" + mac + R"(_e)" + std::to_string(entity_id) + R"(_btn",)" + device_json + R"(})";
       
       mqtt::global_mqtt_client->publish(event_topic, event_payload, 0, true);
   
       discovered_buttons.push_back(button_key);
     }
     #endif
-}
+  }
+
 // 3. The Main Handler Function
 void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
   if (size == sizeof(Message)) {
