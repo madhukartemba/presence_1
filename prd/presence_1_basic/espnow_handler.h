@@ -5,7 +5,7 @@
 #include <algorithm>
 
 // 1. Unified Enums
-enum MessageType { BUTTON_PRESS, BATTERY_STATUS };
+enum MessageType { BUTTON_PRESS, BATTERY_STATUS, DISCOVERY_REQUEST };
 enum PressEvent { NONE_PRESS, SINGLE_PRESS, DOUBLE_PRESS, LONG_PRESS };
 enum BatteryStatus { CHARGING, DISCHARGING, FULL_CHARGED, NOT_CONNECTED, CHARGE_FAULT };
 
@@ -90,56 +90,42 @@ void publish_mqtt_discovery(const std::string& mac, int entity_id) {
     #endif
 }
 
-// 3. The Main Handler Function
+
 void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
-  if (size == sizeof(Message)) {
-    auto msg = (const Message *)data;
-    if (msg->deviceId != 0) return; 
-
-    std::string sender_mac = mac_to_str(addr);
-    publish_mqtt_discovery(sender_mac, msg->entityId);
-
-    #ifdef USE_MQTT
-    if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
-      
-      if (msg->type == BUTTON_PRESS) {
-        std::string base_topic = "esp_click/" + sender_mac + "/entity_" + std::to_string(msg->entityId);
-        std::string payload;
-        switch(msg->data.buttonPress.event) {
-          case SINGLE_PRESS: payload = "single"; break;
-          case DOUBLE_PRESS: payload = "double"; break;
-          case LONG_PRESS:   payload = "long";   break;
-          default:           payload = "none";   break;
-        }
-        // Button events are NOT retained
-        mqtt::global_mqtt_client->publish(base_topic + "/event", payload, 0, false);
-        ESP_LOGI("esp_click", "[%s] Button %d: %s", sender_mac.c_str(), msg->entityId, payload.c_str());
-      } 
-      
-      else if (msg->type == BATTERY_STATUS) {
-        std::string bat_base_topic = "esp_click/" + sender_mac;
+    if (size == sizeof(Message)) {
+      auto msg = (const Message *)data;
+      if (msg->deviceId != 0) return; 
+  
+      // === NEW: THE PING INTERCEPTOR ===
+      if (msg->type == DISCOVERY_REQUEST) {
+        ESP_LOGD("esp_click", "Received Discovery Ping from MAC. Sending silent ACK.");
+        AckMessage ack_msg;
+        ack_msg.counter = msg->counter;
+        ack_msg.success = true;
+        esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
         
-        std::string level_payload = std::to_string(msg->data.batteryLevel.level);
-        mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_level", level_payload, 0, true);
-
-        std::string status_payload;
-        switch(msg->data.batteryLevel.status) {
-          case CHARGING:      status_payload = "charging"; break;
-          case DISCHARGING:   status_payload = "discharging"; break;
-          case FULL_CHARGED:  status_payload = "full"; break;
-          case NOT_CONNECTED: status_payload = "not_connected"; break;
-          case CHARGE_FAULT:  status_payload = "fault"; break;
-          default:            status_payload = "unknown"; break;
-        }
-        mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_status", status_payload, 0, true);
-        ESP_LOGI("esp_click", "[%s] Battery: %s%% (%s)", sender_mac.c_str(), level_payload.c_str(), status_payload.c_str());
+        // Return immediately! Do not process HA Discovery or MQTT.
+        return; 
       }
+      // =================================
+  
+      // If it makes it past the interceptor, it's a real Unicast payload.
+      // Proceed with normal HA Discovery and MQTT Publishing...
+      
+      std::string sender_mac = mac_to_str(addr);
+      publish_mqtt_discovery(sender_mac, msg->entityId);
+  
+      #ifdef USE_MQTT
+      if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
+        // ... (Your existing BUTTON_PRESS and BATTERY_STATUS logic here) ...
+      }
+      #endif
+  
+      // Send the ACK for the actual payload
+      AckMessage ack_msg;
+      ack_msg.counter = msg->counter;
+      ack_msg.success = true;
+      esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
     }
-    #endif
-
-    AckMessage ack_msg;
-    ack_msg.counter = msg->counter;
-    ack_msg.success = true;
-    esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
   }
-}
+
