@@ -13,10 +13,9 @@ enum BatteryStatus { CHARGING, DISCHARGING, FULL_CHARGED, NOT_CONNECTED, CHARGE_
 struct __attribute__((packed)) Message {
   uint32_t counter;
   int deviceId;
-  int entityId;
   MessageType type;
   union {
-    struct { PressEvent event; } buttonPress;
+    struct { int buttonId; PressEvent event; } buttonPress;
     struct { int level; BatteryStatus status; } batteryLevel;
   } data;
 };
@@ -113,7 +112,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       // Proceed with normal HA Discovery and MQTT Publishing...
       
       std::string sender_mac = mac_to_str(addr);
-      publish_mqtt_discovery(sender_mac, msg->entityId);
+      publish_mqtt_discovery(sender_mac, msg->buttonPress.buttonId);
   
       #ifdef USE_MQTT
       if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
