@@ -60,22 +60,35 @@ void publish_mqtt_discovery(const std::string& mac, int entity_id) {
       discovered_macs.push_back(mac);
     }
   
-    // 2. ENTITY LEVEL (Buttons) - Added force_update and expire_after
+    // 2. ENTITY LEVEL (Buttons)
     std::string button_key = mac + "_" + std::to_string(entity_id);
     if (std::find(discovered_buttons.begin(), discovered_buttons.end(), button_key) == discovered_buttons.end()) {
-      ESP_LOGI("esp_click", "Publishing HA Discovery for Button Sensor: %s (Entity %d)", mac.c_str(), entity_id);
+      ESP_LOGI("esp_click", "Publishing HA Discovery for Device Triggers: %s (Entity %d)", mac.c_str(), entity_id);
   
-      std::string event_topic = "homeassistant/sensor/esp_click_" + mac + "/btn_" + std::to_string(entity_id) + "/config";
-      
-      // Added "force_update":true and "expire_after":2
-      std::string event_payload = R"({"name":"Button )" + std::to_string(entity_id) + R"(","state_topic":"esp_click/)" + mac + R"(/entity_)" + std::to_string(entity_id) + R"(/event","icon":"mdi:gesture-tap-button","force_update":true,"expire_after":2,"unique_id":"esp_click_)" + mac + R"(_e)" + std::to_string(entity_id) + R"(_btn",)" + device_json + R"(})";
-      
-      mqtt::global_mqtt_client->publish(event_topic, event_payload, 0, true);
-  
+      std::string base_state_topic = "esp_click/" + mac + "/entity_" + std::to_string(entity_id) + "/event";
+
+      // +1 Math trick for the HA UI Subtype ("First Button", "Second Button")
+      std::string ha_subtype = "button_" + std::to_string(entity_id + 1);
+
+      // Trigger 1: Single Press
+      std::string single_topic = "homeassistant/device_automation/esp_click_" + mac + "/btn_" + std::to_string(entity_id) + "_single/config";
+      std::string single_payload = R"({"automation_type":"trigger","type":"button_short_press","subtype":")" + ha_subtype + R"(","payload":"single","topic":")" + base_state_topic + R"(",)" + device_json + R"(})";
+      mqtt::global_mqtt_client->publish(single_topic, single_payload, 0, true);
+
+      // Trigger 2: Double Press
+      std::string double_topic = "homeassistant/device_automation/esp_click_" + mac + "/btn_" + std::to_string(entity_id) + "_double/config";
+      std::string double_payload = R"({"automation_type":"trigger","type":"button_double_press","subtype":")" + ha_subtype + R"(","payload":"double","topic":")" + base_state_topic + R"(",)" + device_json + R"(})";
+      mqtt::global_mqtt_client->publish(double_topic, double_payload, 0, true);
+
+      // Trigger 3: Long Press
+      std::string long_topic = "homeassistant/device_automation/esp_click_" + mac + "/btn_" + std::to_string(entity_id) + "_long/config";
+      std::string long_payload = R"({"automation_type":"trigger","type":"button_long_press","subtype":")" + ha_subtype + R"(","payload":"long","topic":")" + base_state_topic + R"(",)" + device_json + R"(})";
+      mqtt::global_mqtt_client->publish(long_topic, long_payload, 0, true);
+
       discovered_buttons.push_back(button_key);
     }
     #endif
-  }
+}
 
 // 3. The Main Handler Function
 void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
@@ -104,11 +117,9 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       } 
       
       else if (msg->type == BATTERY_STATUS) {
-        // Battery status is published to the MAC level, avoiding entityId
         std::string bat_base_topic = "esp_click/" + sender_mac;
         
         std::string level_payload = std::to_string(msg->data.batteryLevel.level);
-        // Retain = TRUE so HA remembers battery between reboots
         mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_level", level_payload, 0, true);
 
         std::string status_payload;
@@ -120,7 +131,6 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
           case CHARGE_FAULT:  status_payload = "fault"; break;
           default:            status_payload = "unknown"; break;
         }
-        // Retain = TRUE
         mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_status", status_payload, 0, true);
         ESP_LOGI("esp_click", "[%s] Battery: %s%% (%s)", sender_mac.c_str(), level_payload.c_str(), status_payload.c_str());
       }
