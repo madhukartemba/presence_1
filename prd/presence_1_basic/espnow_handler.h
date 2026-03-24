@@ -134,11 +134,6 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       std::string sender_mac = mac_to_str(addr);
       publish_mqtt_discovery(sender_mac, msg->data.buttonPress.buttonId);
   
-      #ifdef USE_MQTT
-      if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
-        // ... (Your existing BUTTON_PRESS and BATTERY_STATUS logic here) ...
-      }
-      #endif
   
       // Send the ACK for the actual payload
       AckMessage ack_msg;
