@@ -132,7 +132,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       // Proceed with normal HA Discovery and MQTT Publishing...
       
       std::string sender_mac = mac_to_str(addr);
-      publish_mqtt_discovery(sender_mac, msg->buttonPress.buttonId);
+      publish_mqtt_discovery(sender_mac, msg->data.buttonPress.buttonId);
   
       #ifdef USE_MQTT
       if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
