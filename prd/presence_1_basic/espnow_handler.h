@@ -130,10 +130,49 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
   
       // If it makes it past the interceptor, it's a real Unicast payload.
       // Proceed with normal HA Discovery and MQTT Publishing...
-      
-      std::string sender_mac = mac_to_str(addr);
-      publish_mqtt_discovery(sender_mac, msg->data.buttonPress.buttonId);
   
+      std::string sender_mac = mac_to_str(addr);
+
+      #ifdef USE_MQTT
+      if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
+      
+      if (msg->type == BUTTON_PRESS) {
+          publish_mqtt_discovery(sender_mac, msg->data.buttonPress.buttonId);
+          
+          std::string base_topic = "esp_click/" + sender_mac + "/entity_" + std::to_string(msg->data.buttonPress.buttonId);
+          std::string payload;
+          switch(msg->data.buttonPress.event) {
+          case SINGLE_PRESS: payload = "single"; break;
+          case DOUBLE_PRESS: payload = "double"; break;
+          case LONG_PRESS:   payload = "long";   break;
+          default:           payload = "none";   break;
+          }
+          // Button events are NOT retained
+          mqtt::global_mqtt_client->publish(base_topic + "/event", payload, 0, false);
+          ESP_LOGI("esp_click", "[%s] Button %d: %s", sender_mac.c_str(), msg->data.buttonPress.buttonId, payload.c_str());
+      } 
+      
+      else if (msg->type == BATTERY_STATUS) {
+          std::string bat_base_topic = "esp_click/" + sender_mac;
+          
+          std::string level_payload = std::to_string(msg->data.batteryLevel.level);
+          mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_level", level_payload, 0, true);
+
+          std::string status_payload;
+          switch(msg->data.batteryLevel.status) {
+          case CHARGING:      status_payload = "charging"; break;
+          case DISCHARGING:   status_payload = "discharging"; break;
+          case FULL_CHARGED:  status_payload = "full"; break;
+          case NOT_CONNECTED: status_payload = "not_connected"; break;
+          case CHARGE_FAULT:  status_payload = "fault"; break;
+          default:            status_payload = "unknown"; break;
+          }
+          mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_status", status_payload, 0, true);
+          ESP_LOGI("esp_click", "[%s] Battery: %s%% (%s)", sender_mac.c_str(), level_payload.c_str(), status_payload.c_str());
+      }
+      }
+      #endif
+
   
       // Send the ACK for the actual payload
       AckMessage ack_msg;
