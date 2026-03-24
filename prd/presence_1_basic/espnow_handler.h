@@ -138,7 +138,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       
       if (msg->type == BUTTON_PRESS) {
           publish_mqtt_discovery(sender_mac, msg->data.buttonPress.buttonId);
-          
+
           std::string base_topic = "esp_click/" + sender_mac + "/entity_" + std::to_string(msg->data.buttonPress.buttonId);
           std::string payload;
           switch(msg->data.buttonPress.event) {
@@ -149,7 +149,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
           }
           // Button events are NOT retained
           mqtt::global_mqtt_client->publish(base_topic + "/event", payload, 0, false);
-          ESP_LOGI("esp_click", "[%s] Button %d: %s", sender_mac.c_str(), msg->data.buttonPress.buttonId, payload.c_str());
+          ESP_LOGI("esp_click", "[%s] Button %d: %s Counter: %d", sender_mac.c_str(), msg->data.buttonPress.buttonId, payload.c_str(), msg->counter);
       } 
       
       else if (msg->type == BATTERY_STATUS) {
@@ -168,7 +168,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
           default:            status_payload = "unknown"; break;
           }
           mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_status", status_payload, 0, true);
-          ESP_LOGI("esp_click", "[%s] Battery: %s%% (%s)", sender_mac.c_str(), level_payload.c_str(), status_payload.c_str());
+          ESP_LOGI("esp_click", "[%s] Battery: %s%% (%s) Counter: %d", sender_mac.c_str(), level_payload.c_str(), status_payload.c_str(), msg->counter);
       }
       }
       #endif
