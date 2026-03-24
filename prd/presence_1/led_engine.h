@@ -20,6 +20,7 @@ LiteLED strip(LED_STRIP_WS2812, false);
 enum AnimationMode {
   IDLE,
   CENTER_PULSE,
+  REVERSE_CENTER_PULSE,
   BOOT,
   BOOT_FADE_OUT,
   WIFI_CONNECTING,
@@ -88,6 +89,15 @@ void led_play_center_wave(const LedColor* colors, int num_colors) {
   }
 }
 
+void led_play_reverse_center_wave(const LedColor* colors, int num_colors) {
+  current_mode = REVERSE_CENTER_PULSE;
+  reset_timing();
+  pulse_color_count = constrain(num_colors, 1, MAX_PULSE_COLORS);
+  for (int i = 0; i < pulse_color_count; i++) {
+    pulse_colors[i] = colors[i];
+  }
+}
+
 void led_play_feedback_single() {
   LedColor blue = {0, 0, 255};
   led_play_center_wave(&blue, 1);
@@ -142,6 +152,64 @@ void led_tick() {
         float distance = abs(i - center);
         float intensity = exp(-pow(distance - wave_position, 2) / width);
         intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
+
+        setPixel(i, base.r * intensity, base.g * intensity, base.b * intensity);
+      }
+
+      show();
+      frame++;
+      break;
+    }
+
+    case REVERSE_CENTER_PULSE: {
+      const int movement_frames = 40; // Fast movement to match CENTER_PULSE
+      const int fade_out_frames = 10; // Quick fade at the end
+      const int total_frames = movement_frames + fade_out_frames;
+      
+      const int center = 2; 
+      const float max_distance = (float)(LED_COUNT - 1) / 2.0f;
+
+      if (frame >= total_frames) {
+        clear(); show();
+        current_mode = IDLE;
+        return;
+      }
+
+      unsigned long now = millis();
+      if (now - last_frame_ms < PULSE_FRAME_INTERVAL_MS) return;
+      last_frame_ms = now;
+
+      clear();
+
+      // 1. Calculate Wave Position
+      // Matches the 0.08f speed: (2.0 max distance / 0.08 speed = ~25-40 frames)
+      float progress = (float)min(frame, movement_frames) / (float)movement_frames;
+      float wave_position = max_distance * (1.0f - progress);
+      float width = 0.8f;
+
+      // 2. Intensity Modifiers
+      float intensity_mod = 1.0f;
+
+      // Quick Fade In (first 8 frames)
+      if (frame < 8) {
+        intensity_mod = pow((float)frame / 8.0f, 2.0f);
+      }
+      
+      // Quick Fade Out (last 10 frames)
+      if (frame >= movement_frames) {
+        float fade_out_progress = (float)(frame - movement_frames) / (float)fade_out_frames;
+        intensity_mod = (1.0f - fade_out_progress);
+      }
+
+      int color_idx = (frame * pulse_color_count) / total_frames % pulse_color_count;
+      LedColor base = pulse_colors[color_idx];
+
+      for (int i = 0; i < LED_COUNT; i++) {
+        float distance = abs(i - center);
+        float intensity = expf(-powf(distance - wave_position, 2) / width);
+        
+        // Apply the combined intensity and fade
+        intensity = constrain(intensity, 0.0f, 1.0f) * intensity_mod;
 
         setPixel(i, base.r * intensity, base.g * intensity, base.b * intensity);
       }

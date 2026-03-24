@@ -36,9 +36,25 @@ wifi:
 
 captive_portal:
 
-# Enables Home Assistant Bluetooth Proxy
-bluetooth_proxy:
-  active: true
+
+mqtt:
+  broker: homeassistant.local
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+
+espnow:
+  auto_add_peer: true
+  
+  on_broadcast:
+    then:
+      - lambda: |-
+          handle_espnow_packet(info.src_addr, data, size);
+
+  on_receive:
+    then:
+      - lambda: |-
+          handle_espnow_packet(info.src_addr, data, size);
+          
 
 globals:
   - id: motion_enabled
