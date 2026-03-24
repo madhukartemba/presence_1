@@ -3,6 +3,7 @@ esphome:
   friendly_name: PresenceNode_${device_id}
   includes:
     - led_engine.h
+    - espnow_handler.h
   platformio_options:
     lib_deps:
       - Xylopyrographer/LiteLED@3.0.1
