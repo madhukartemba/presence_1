@@ -142,9 +142,24 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
           std::string base_topic = "esp_click/" + sender_mac + "/entity_" + std::to_string(msg->data.buttonPress.buttonId);
           std::string payload;
           switch(msg->data.buttonPress.event) {
-          case SINGLE_PRESS: payload = "single"; break;
-          case DOUBLE_PRESS: payload = "double"; break;
-          case LONG_PRESS:   payload = "long";   break;
+          case SINGLE_PRESS: {
+            payload = "single";
+            static const LedColor blue = {0, 0, 255};
+            led_play_reverse_center_wave(&blue, 1);
+            break;
+          }
+          case DOUBLE_PRESS: {
+            payload = "double";
+            static const LedColor magenta = {255, 0, 255};
+            led_play_reverse_center_wave(&magenta, 1);
+            break;
+          }
+          case LONG_PRESS: {
+            payload = "long";
+            static const LedColor cyan = {0, 255, 255};
+            led_play_reverse_center_wave(&cyan, 1);
+            break;
+          }
           default:           payload = "none";   break;
           }
           // Button events are NOT retained
