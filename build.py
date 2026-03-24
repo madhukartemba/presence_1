@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.12
 
 import argparse
 import subprocess
@@ -6,10 +6,11 @@ from pathlib import Path
 import sys
 import shutil
 
-
+# --- Modified Constants ---
 VENV_DIRNAME = ".venv"
 REQUIRED_PYTHON = "python3.12"
-
+ESPHOME_VERSION = "2026.1.2"
+# --------------------------
 
 def find_project_root(start: Path) -> Path:
     current = start.resolve()
@@ -25,23 +26,29 @@ def ensure_venv(project_root: Path, reinstall: bool = False):
     venv_python = venv_path / "bin" / "python"
 
     if reinstall and venv_path.exists():
-        print("Removing existing venv...")
+        print(f"Removing existing venv at {venv_path}...")
         shutil.rmtree(venv_path)
 
     if not venv_path.exists():
-        print("Creating virtual environment...")
+        # Check if python3.12 is installed on the system
+        if not shutil.which(REQUIRED_PYTHON):
+            print(f"Error: {REQUIRED_PYTHON} not found in PATH. Please install it first.")
+            sys.exit(1)
+
+        print(f"Creating virtual environment using {REQUIRED_PYTHON}...")
         subprocess.run(
             [REQUIRED_PYTHON, "-m", "venv", str(venv_path)],
             check=True
         )
 
-        print("Installing ESPHome in venv...")
+        print(f"Upgrading pip and installing ESPHome {ESPHOME_VERSION}...")
         subprocess.run(
             [str(venv_python), "-m", "pip", "install", "--upgrade", "pip"],
             check=True
         )
+        # Modified to use explicit version pinning
         subprocess.run(
-            [str(venv_python), "-m", "pip", "install", "esphome"],
+            [str(venv_python), "-m", "pip", "install", f"esphome=={ESPHOME_VERSION}"],
             check=True
         )
 
@@ -86,9 +93,11 @@ def main():
     secrets_created = False
 
     try:
+        # Symlink/Copy management
         if not local_secrets.exists():
             try:
-                local_secrets.symlink_to(root_secrets)
+                # Use absolute path for symlink source to avoid broken links
+                local_secrets.symlink_to(root_secrets.absolute())
             except Exception:
                 shutil.copy2(root_secrets, local_secrets)
             secrets_created = True
@@ -121,6 +130,7 @@ def main():
         subprocess.run(command, check=True, cwd=project_root)
 
     finally:
+        # Clean up the temporary secrets file if we created it
         if secrets_created and local_secrets.exists():
             try:
                 local_secrets.unlink()
