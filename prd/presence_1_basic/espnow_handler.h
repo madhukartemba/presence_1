@@ -5,24 +5,44 @@
 #include <algorithm>
 
 // 1. Unified Enums
-enum MessageType { BUTTON_PRESS, BATTERY_STATUS, DISCOVERY_REQUEST };
 enum PressEvent { NONE_PRESS, SINGLE_PRESS, DOUBLE_PRESS, LONG_PRESS };
 enum BatteryStatus { CHARGING, DISCHARGING, FULL_CHARGED, NOT_CONNECTED, CHARGE_FAULT };
 
 // 2. Packed Structs
-struct __attribute__((packed)) Message {
-  uint32_t counter;
-  int deviceId;
-  MessageType type;
-  union {
-    struct { int buttonId; PressEvent event; } buttonPress;
-    struct { int level; BatteryStatus status; } batteryLevel;
-  } data;
+enum MessageType
+{
+    BUTTON_PRESS,
+    BATTERY_STATUS,
+    DISCOVERY_REQUEST
 };
 
-struct __attribute__((packed)) AckMessage {
-  uint32_t counter;
-  bool success;
+// Application-level ACK structure MUST be packed
+struct __attribute__((packed)) AckMessage
+{
+    uint32_t counter;
+    bool success;
+};
+
+// Message structure MUST be packed
+struct __attribute__((packed)) Message
+{
+    uint32_t counter;
+    int deviceId = 0;
+    MessageType type;
+    union
+    {
+        struct
+        {
+            int buttonId;
+            PressEvent event;
+        } buttonPress;
+
+        struct
+        {
+            int level;
+            BatteryStatus status;
+        } batteryLevel;
+    } data;
 };
 
 // Trackers
