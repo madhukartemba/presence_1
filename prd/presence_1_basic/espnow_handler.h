@@ -119,7 +119,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       std::string sender_mac = mac_to_str(addr);
       // Pairing success already plays a green wave; skip button LED on the same packet so it is not overwritten.
       bool skip_button_led_feedback = false;
-// ==========================================
+      // ==========================================
       // NEW: SECURITY & AUTHENTICATION INTERCEPTOR
       // ==========================================
       bool is_known = (std::find(known_macs.begin(), known_macs.end(), sender_mac) != known_macs.end());
