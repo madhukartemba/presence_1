@@ -201,6 +201,34 @@ switch:
 
 
 # ====================
+# BUTTONS
+# ====================
+button:
+  - platform: template
+    name: "Clear All Paired Devices"
+    id: clear_macs_button
+    icon: mdi:delete-sweep
+    entity_category: config
+    on_press:
+      - lambda: |-
+          // 1. Clear the local memory
+          known_macs.clear();
+          ESP_LOGI("esp_click", "All paired MAC addresses cleared!");
+          
+          // 2. Play a visual LED confirmation (e.g., Red wave)
+          static const LedColor red = {255, 0, 0};
+          led_play_reverse_center_wave(&red, 2); 
+
+          // 3. Wipe the MQTT Database
+          #ifdef USE_MQTT
+          if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
+              mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_macs"), std::string("{\"allowed_macs\":[]}"), 0, true);
+          }
+          #endif
+      - logger.log: "Published empty MAC list to MQTT broker."
+
+
+# ====================
 # BINARY SENSORS
 # ====================
 binary_sensor:
@@ -251,6 +279,7 @@ binary_sensor:
           - ON for 50ms to 350ms
           - OFF for 50ms to 350ms
           - ON for 50ms to 350ms
+          - OFF for at least 200ms
         then:
           - event.trigger:
               id: button_event
