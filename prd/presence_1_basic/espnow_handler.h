@@ -126,6 +126,13 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
           if (pairing_mode_active) {
               ESP_LOGI("esp_click", "Pairing Mode ON. Accepting and pairing new device: %s", sender_mac.c_str());
               known_macs.push_back(sender_mac);
+
+              // ==========================================
+              // SUCCESSFUL PAIRING LED FEEDBACK
+              // ==========================================
+              static const LedColor green = {0, 255, 0};
+              led_play_reverse_center_wave(&green, 1); 
+              // ==========================================
               
               // NO HOME ASSISTANT REQUIRED: ESP builds the JSON and retains it on the broker
               #ifdef USE_MQTT
