@@ -216,9 +216,9 @@ button:
           known_macs.clear();
           ESP_LOGI("esp_click", "All paired MAC addresses cleared!");
           
-          // 2. Play a visual LED confirmation (e.g., Red wave)
+          // 2. LED confirmation (second arg is palette size — must match passed colors)
           static const LedColor red = {255, 0, 0};
-          led_play_reverse_center_wave(&red, 2); 
+          led_play_reverse_center_wave(&red, 1);
 
           // 3. Wipe the MQTT Database
           #ifdef USE_MQTT

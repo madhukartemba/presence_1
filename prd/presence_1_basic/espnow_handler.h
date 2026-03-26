@@ -117,6 +117,8 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       if (msg->deviceId != 0) return; 
 
       std::string sender_mac = mac_to_str(addr);
+      // Pairing success already plays a green wave; skip button LED on the same packet so it is not overwritten.
+      bool skip_button_led_feedback = false;
 // ==========================================
       // NEW: SECURITY & AUTHENTICATION INTERCEPTOR
       // ==========================================
@@ -131,7 +133,8 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
               // SUCCESSFUL PAIRING LED FEEDBACK
               // ==========================================
               static const LedColor green = {0, 255, 0};
-              led_play_reverse_center_wave(&green, 1); 
+              led_play_reverse_center_wave(&green, 1);
+              skip_button_led_feedback = true;
               // ==========================================
               
               // NO HOME ASSISTANT REQUIRED: ESP builds the JSON and retains it on the broker
@@ -184,20 +187,26 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
           switch(msg->data.buttonPress.event) {
           case SINGLE_PRESS: {
             payload = "single";
-            static const LedColor blue = {0, 0, 255};
-            led_play_reverse_center_wave(&blue, 1);
+            if (!skip_button_led_feedback) {
+              static const LedColor blue = {0, 0, 255};
+              led_play_reverse_center_wave(&blue, 1);
+            }
             break;
           }
           case DOUBLE_PRESS: {
             payload = "double";
-            static const LedColor magenta = {255, 0, 255};
-            led_play_reverse_center_wave(&magenta, 1);
+            if (!skip_button_led_feedback) {
+              static const LedColor magenta = {255, 0, 255};
+              led_play_reverse_center_wave(&magenta, 1);
+            }
             break;
           }
           case LONG_PRESS: {
             payload = "long";
-            static const LedColor cyan = {0, 255, 255};
-            led_play_reverse_center_wave(&cyan, 1);
+            if (!skip_button_led_feedback) {
+              static const LedColor cyan = {0, 255, 255};
+              led_play_reverse_center_wave(&cyan, 1);
+            }
             break;
           }
           default:           payload = "none";   break;

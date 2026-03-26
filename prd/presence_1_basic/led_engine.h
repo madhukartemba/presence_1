@@ -32,6 +32,9 @@ enum AnimationMode {
   PAIRING
 };
 
+// Defined in espnow_handler.h — feedback waves resume yellow pairing when this stays true.
+extern bool pairing_mode_active;
+
 // ==========================================
 // GLOBAL STATE
 // ==========================================
@@ -57,6 +60,17 @@ inline void reset_timing() {
 
 inline void show() { strip.show(); }
 inline void clear() { strip.clear(); }
+
+inline void end_feedback_wave_or_resume_pairing() {
+  clear();
+  show();
+  if (pairing_mode_active) {
+    current_mode = PAIRING;
+    reset_timing();
+  } else {
+    current_mode = IDLE;
+  }
+}
 
 inline void setPixel(int i, uint8_t r, uint8_t g, uint8_t b) {
   rgb_t c = { r, g, b };   // Standard RGB order
@@ -122,8 +136,7 @@ void tick_center_pulse() {
   const int center = 2; // Middle LED for a 5-LED strip
 
   if (frame >= total_frames) {
-    clear(); show();
-    current_mode = IDLE;
+    end_feedback_wave_or_resume_pairing();
     return;
   }
 
@@ -160,8 +173,7 @@ void tick_reverse_center_pulse() {
   const float max_distance = (float)(LED_COUNT - 1) / 2.0f;
 
   if (frame >= total_frames) {
-    clear(); show();
-    current_mode = IDLE;
+    end_feedback_wave_or_resume_pairing();
     return;
   }
 
