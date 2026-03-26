@@ -7,6 +7,7 @@ esphome:
   platformio_options:
     lib_deps:
       - Xylopyrographer/LiteLED@3.0.1
+      - bblanchon/ArduinoJson@6.21.3 # Required to parse the MAC array
   on_boot:
     priority: 600
     then:
@@ -31,6 +32,7 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  power_save_mode: none
   ap:
     ssid: "PresenceNode_${device_id}_Setup"
     password: ""
@@ -42,6 +44,49 @@ mqtt:
   broker: homeassistant.local
   username: !secret mqtt_username
   password: !secret mqtt_password
+  discovery: false # Disable HA discovery
+  # 1. Fetch list on connection
+  on_connect:
+    - mqtt.publish:
+        topic: "esp_click/request_macs"
+        payload: "fetch"
+  # 2. Receive and update list dynamically
+  on_json_message:
+    - topic: "esp_click/allowed_macs"
+      then:
+        - lambda: |-
+            // Static flag ensures we don't flash LEDs on the initial boot download
+            static bool initial_sync_done = false;
+            
+            int old_size = known_macs.size();
+            known_macs.clear();
+            
+            JsonArrayConst macs = x["allowed_macs"].as<JsonArrayConst>();
+            for (JsonVariantConst v : macs) {
+              known_macs.push_back(v.as<std::string>());
+            }
+            
+            int new_size = known_macs.size();
+            ESP_LOGI("esp_click", "Updated allowed MACs from HA. Total devices allowed: %d", new_size);
+
+            // ==========================================
+            // NETWORK-WIDE LED NOTIFICATIONS
+            // ==========================================
+            if (initial_sync_done) {
+              // If the list was wiped out: Flash Red
+              if (new_size == 0 && old_size > 0) {
+                static const LedColor red = {255, 0, 0};
+                led_play_reverse_center_wave(&red, 1);
+              } 
+              // If the list grew: Flash Green
+              else if (new_size > old_size) {
+                static const LedColor green = {0, 255, 0};
+                led_play_reverse_center_wave(&green, 1);
+              }
+            }
+            
+            // Mark the boot sync as complete
+            initial_sync_done = true;
 
 espnow:
   auto_add_peer: true
@@ -119,7 +164,7 @@ sensor:
       name : Moving Distance
   - platform: veml7700
     address: 0x10
-    update_interval: 3s
+    update_interval: 30s
     ambient_light:
       name: "Ambient Light (Lux)"
     full_spectrum:
@@ -132,7 +177,34 @@ sensor:
       name: "VEML7700 Integration Time"
 
 # ====================
-# MOTION ENABLE SWITCH (HA)
+# SCRIPTS
+# ====================
+script:
+  - id: pairing_mode_timer
+    mode: restart
+    then:
+      - switch.turn_on: pairing_mode_switch
+      - logger.log: "Pairing mode activated. Waiting for devices..."
+      - delay: 60s
+      - switch.turn_off: pairing_mode_switch
+      - logger.log: "Pairing mode timed out and closed."
+
+  # NEW: Continuous pulsing loop for the Pairing LED
+  - id: pairing_led_loop
+    mode: restart
+    then:
+      - while:
+          condition:
+            switch.is_on: pairing_mode_switch
+          then:
+            - lambda: |-
+                static const LedColor yellow = {255, 255, 0};
+                led_play_reverse_center_wave(&yellow, 1);
+            # Wait 2 seconds before firing the next wave (acts like a heartbeat pulse)
+            - delay: 2s
+
+# ====================
+# SWITCHES
 # ====================
 switch:
   - platform: template
@@ -143,7 +215,6 @@ switch:
     turn_on_action:
       - globals.set: { id: motion_enabled, value: 'true' }
       - lambda: |-
-          // Optional: LED feedback when motion enabled via HA
           led_play_feedback_motion_on();
     turn_off_action:
       - globals.set: { id: motion_enabled, value: 'false' }
@@ -151,8 +222,56 @@ switch:
           id: radar_presence
           state: OFF
       - lambda: |-
-          // LED feedback when motion disabled via HA
           led_play_feedback_motion_off();
+  # ====================
+  # ESP-NOW PAIRING MODE SWITCH
+  # ====================
+  - platform: template
+    name: "ESP-NOW Pairing Mode"
+    id: pairing_mode_switch
+    icon: mdi:bluetooth-connect
+    optimistic: true
+    turn_on_action:
+      - lambda: 'pairing_mode_active = true;'
+      # Call the new infinite C++ animation!
+      - lambda: 'led_play_pairing();'
+    turn_off_action:
+      - lambda: 'pairing_mode_active = false;'
+      - script.stop: pairing_mode_timer
+      # LED Feedback: Red wave indicates Pairing Mode is CLOSED (this overrides the infinite pairing loop)
+      - lambda: |-
+          static const LedColor red = {255, 0, 0};
+          led_play_reverse_center_wave(&red, 1);
+
+
+# ====================
+# BUTTONS
+# ====================
+button:
+  - platform: template
+    name: "Clear All Paired Devices"
+    id: clear_macs_button
+    icon: mdi:delete-sweep
+    entity_category: config
+    on_press:
+      - lambda: |-
+          // Just wipe the MQTT Database. 
+          // The on_json_message block will automatically catch this, wipe local memory, and flash Red!
+          #ifdef USE_MQTT
+          if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
+              mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_macs"), std::string("{\"allowed_macs\":[]}"), 0, true);
+          }
+          #endif
+      - logger.log: "Published empty MAC list to MQTT broker."
+  - platform: ld2420
+    apply_config:
+      name: Apply Config
+    factory_reset:
+      name: Factory Reset
+    restart_module:
+      name: Restart Module
+    revert_config:
+      name: Undo Edits
 
 
 # ====================
@@ -182,6 +301,21 @@ binary_sensor:
     name: "Push Button"
 
     on_multi_click:
+      - timing:
+          - ON for 50ms to 350ms
+          - OFF for 50ms to 350ms
+          - ON for 50ms to 350ms
+          - OFF for 50ms to 350ms
+          - ON for 50ms to 350ms
+          - OFF for at least 200ms
+        then:
+          - if:
+              condition:
+                switch.is_off: pairing_mode_switch
+              then:
+                - script.execute: pairing_mode_timer
+              else:
+                - switch.turn_off: pairing_mode_switch
 
       # SINGLE
       - timing:
@@ -200,6 +334,7 @@ binary_sensor:
           - ON for 50ms to 350ms
           - OFF for 50ms to 350ms
           - ON for 50ms to 350ms
+          - OFF for at least 200ms
         then:
           - event.trigger:
               id: button_event
@@ -208,7 +343,7 @@ binary_sensor:
               led_play_feedback_double();
           - logger.log: "Event Fired: Double Press"
 
-      # LONG  ← YOUR TOGGLE
+      # LONG  ← motion toggle
       - timing:
           - ON for at least 500ms
         then:
@@ -263,14 +398,3 @@ number:
       name: Set Still Threshold Value
     move_threshold:
       name: Set Move Threshold Value
-
-button:
-  - platform: ld2420
-    apply_config:
-      name: Apply Config
-    factory_reset:
-      name: Factory Reset
-    restart_module:
-      name: Restart Module
-    revert_config:
-      name: Undo Edits

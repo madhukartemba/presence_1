@@ -7,6 +7,9 @@
 
 using namespace esphome;
 
+// ==========================================
+// CONFIGURATION
+// ==========================================
 #define LED_PIN 6
 #define LED_COUNT 5
 #define MAX_PULSE_COLORS 8
@@ -25,11 +28,17 @@ enum AnimationMode {
   BOOT_FADE_OUT,
   WIFI_CONNECTING,
   WIFI_SUCCESS,
-  WIFI_FAILURE
+  WIFI_FAILURE,
+  PAIRING
 };
 
-AnimationMode current_mode = IDLE;
+// Defined in espnow_handler.h — feedback waves resume yellow pairing when this stays true.
+extern bool pairing_mode_active;
 
+// ==========================================
+// GLOBAL STATE
+// ==========================================
+AnimationMode current_mode = IDLE;
 int frame = 0;
 unsigned long last_frame_ms = 0;
 unsigned long wifi_connecting_start_ms = 0;
@@ -41,17 +50,26 @@ struct LedColor {
 LedColor pulse_colors[MAX_PULSE_COLORS];
 int pulse_color_count = 1;
 
+// ==========================================
+// LOW-LEVEL HELPER FUNCTIONS
+// ==========================================
 inline void reset_timing() {
   frame = 0;
   last_frame_ms = 0;
 }
 
-inline void show() {
-  strip.show();
-}
+inline void show() { strip.show(); }
+inline void clear() { strip.clear(); }
 
-inline void clear() {
-  strip.clear();
+inline void end_feedback_wave_or_resume_pairing() {
+  clear();
+  show();
+  if (pairing_mode_active) {
+    current_mode = PAIRING;
+    reset_timing();
+  } else {
+    current_mode = IDLE;
+  }
 }
 
 inline void setPixel(int i, uint8_t r, uint8_t g, uint8_t b) {
@@ -59,47 +77,39 @@ inline void setPixel(int i, uint8_t r, uint8_t g, uint8_t b) {
   strip.setPixel(i, c, false);
 }
 
+// ==========================================
+// PUBLIC API (Trigger Animations)
+// ==========================================
 void led_init() {
   strip.begin(LED_PIN, LED_COUNT);
-  clear();
-  show();
+  clear(); show();
 }
 
-void led_play_boot() {
-  current_mode = BOOT;
-  reset_timing();
+void led_play_pairing() { 
+  current_mode = PAIRING; 
+  reset_timing(); 
 }
 
-void led_play_wifi_connected() {
-  current_mode = WIFI_SUCCESS;
-  reset_timing();
-}
-
-void led_play_wifi_failed() {
-  current_mode = WIFI_FAILURE;
-  reset_timing();
-}
+void led_play_boot() { current_mode = BOOT; reset_timing(); }
+void led_play_wifi_connected() { current_mode = WIFI_SUCCESS; reset_timing(); }
+void led_play_wifi_failed() { current_mode = WIFI_FAILURE; reset_timing(); }
 
 void led_play_center_wave(const LedColor* colors, int num_colors) {
   current_mode = CENTER_PULSE;
   reset_timing();
   pulse_color_count = constrain(num_colors, 1, MAX_PULSE_COLORS);
-  for (int i = 0; i < pulse_color_count; i++) {
-    pulse_colors[i] = colors[i];
-  }
+  for (int i = 0; i < pulse_color_count; i++) pulse_colors[i] = colors[i];
 }
 
 void led_play_reverse_center_wave(const LedColor* colors, int num_colors) {
   current_mode = REVERSE_CENTER_PULSE;
   reset_timing();
   pulse_color_count = constrain(num_colors, 1, MAX_PULSE_COLORS);
-  for (int i = 0; i < pulse_color_count; i++) {
-    pulse_colors[i] = colors[i];
-  }
+  for (int i = 0; i < pulse_color_count; i++) pulse_colors[i] = colors[i];
 }
 
 void led_play_feedback_single() {
-  LedColor blue = {0, 0, 255};
+  static const LedColor blue = {0, 0, 255};
   led_play_center_wave(&blue, 1);
 }
 
@@ -118,263 +128,281 @@ void led_play_feedback_motion_off() {
   led_play_center_wave(&red, 1);
 }
 
+// ==========================================
+// ANIMATION LOGIC MODULES
+// ==========================================
+void tick_center_pulse() {
+  const int total_frames = 80;
+  const int center = 2; // Middle LED for a 5-LED strip
+
+  if (frame >= total_frames) {
+    end_feedback_wave_or_resume_pairing();
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - last_frame_ms < PULSE_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  clear();
+
+  float wave_position = frame * 0.08f;
+  float width = 0.8f;
+  const int fade_in_frames = 20;
+  float fade_in = frame < fade_in_frames ? pow((float)frame / fade_in_frames, 2.0f) : 1.0f;
+
+  int color_idx = (frame * pulse_color_count) / total_frames % pulse_color_count;
+  LedColor base = pulse_colors[color_idx];
+
+  for (int i = 0; i < LED_COUNT; i++) {
+    float distance = abs(i - center);
+    float intensity = exp(-pow(distance - wave_position, 2) / width);
+    intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
+    setPixel(i, base.r * intensity, base.g * intensity, base.b * intensity);
+  }
+
+  show();
+  frame++;
+}
+
+void tick_reverse_center_pulse() {
+  const int movement_frames = 40; 
+  const int fade_out_frames = 10; 
+  const int total_frames = movement_frames + fade_out_frames;
+  const int center = 2; 
+  const float max_distance = (float)(LED_COUNT - 1) / 2.0f;
+
+  if (frame >= total_frames) {
+    end_feedback_wave_or_resume_pairing();
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - last_frame_ms < PULSE_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  clear();
+
+  float progress = (float)min(frame, movement_frames) / (float)movement_frames;
+  float wave_position = max_distance * (1.0f - progress);
+  float width = 0.8f;
+  float intensity_mod = 1.0f;
+
+  if (frame < 8) {
+    intensity_mod = pow((float)frame / 8.0f, 2.0f);
+  }
+  if (frame >= movement_frames) {
+    float fade_out_progress = (float)(frame - movement_frames) / (float)fade_out_frames;
+    intensity_mod = (1.0f - fade_out_progress);
+  }
+
+  int color_idx = (frame * pulse_color_count) / total_frames % pulse_color_count;
+  LedColor base = pulse_colors[color_idx];
+
+  for (int i = 0; i < LED_COUNT; i++) {
+    float distance = abs(i - center);
+    float intensity = expf(-powf(distance - wave_position, 2) / width);
+    intensity = constrain(intensity, 0.0f, 1.0f) * intensity_mod;
+    setPixel(i, base.r * intensity, base.g * intensity, base.b * intensity);
+  }
+
+  show();
+  frame++;
+}
+
+void tick_boot() {
+  const int total_frames = 40;
+  const LedColor boot_color = {255, 255, 255};
+
+  if (frame >= total_frames) {
+    current_mode = BOOT_FADE_OUT;
+    reset_timing();
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  clear();
+  float progress = (float)frame * (LED_COUNT + 0.8f) / total_frames;
+  for (int i = 0; i < LED_COUNT; i++) {
+    float t = progress - (float)i;
+    float intensity = t <= 0.0f ? 0.0f : (t >= 1.0f ? 1.0f : t * t * (3.0f - 2.0f * t));
+    setPixel(i, boot_color.r * intensity, boot_color.g * intensity, boot_color.b * intensity);
+  }
+  show();
+  frame++;
+}
+
+void tick_boot_fade_out() {
+  const int fade_frames = 30;
+  const LedColor boot_color = {255, 255, 255};
+
+  unsigned long now = millis();
+  if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  if (frame >= fade_frames) {
+    clear(); show();
+    current_mode = WIFI_CONNECTING;
+    reset_timing();
+    wifi_connecting_start_ms = millis();
+    return;
+  }
+
+  float fade = 1.0f - ((float)frame / (float)(fade_frames - 1));
+  fade = fade * fade; // Smooth ease-out
+
+  for (int i = 0; i < LED_COUNT; i++) {
+    setPixel(i, boot_color.r * fade, boot_color.g * fade, boot_color.b * fade);
+  }
+
+  show();
+  frame++;
+}
+
+void tick_wifi_connecting() {
+  unsigned long now = millis();
+  if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  if (network::is_connected()) {
+    current_mode = WIFI_SUCCESS;
+    reset_timing();
+    return;
+  }
+  if (now - wifi_connecting_start_ms > WIFI_CONNECT_TIMEOUT_MS) {
+    current_mode = WIFI_FAILURE;
+    reset_timing();
+    return;
+  }
+
+  clear();
+  const LedColor wave_color = {0, 0, 255};
+  const float wave_width = 1.2f;
+  const int cycle = 32;
+  const int fade_in_frames = 12;
+  
+  float fade_in = frame < fade_in_frames ? (float)frame / (float)fade_in_frames : 1.0f;
+  fade_in = fade_in * fade_in * (3.0f - 2.0f * fade_in);
+  
+  int step = frame % cycle;
+  float wave_pos = step < cycle / 2 ? (float)step * 0.25f : (float)(cycle - step) * 0.25f;
+  
+  for (int i = 0; i < LED_COUNT; i++) {
+    float d = (float)i - wave_pos;
+    float intensity = expf(-d * d / (wave_width * wave_width));
+    intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
+    setPixel(i, wave_color.r * intensity, wave_color.g * intensity, wave_color.b * intensity);
+  }
+  show();
+  frame++;
+}
+
+void tick_wifi_success() {
+  const int total_frames = 35;
+  const LedColor success_color = {0, 255, 0};
+
+  if (frame >= total_frames) {
+    clear(); show();
+    current_mode = IDLE;
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  clear();
+  float sweep = (float)frame * (LED_COUNT + 1.5f) / (total_frames - 8);
+  float fade_out = frame < total_frames - 10 ? 1.0f : 1.0f - (float)(frame - (total_frames - 10)) / 10.0f;
+  fade_out = fade_out * fade_out;
+  
+  for (int i = 0; i < LED_COUNT; i++) {
+    float t = sweep - (float)i;
+    float intensity = t <= 0.0f ? 0.0f : (t >= 1.2f ? 1.0f : (t >= 1.0f ? 1.0f : t * (2.0f - t)));
+    intensity *= fade_out;
+    setPixel(i, success_color.r * intensity, success_color.g * intensity, success_color.b * intensity);
+  }
+  show();
+  frame++;
+}
+
+void tick_wifi_failure() {
+  const int total_frames = 48;
+  const LedColor fail_color = {255, 0, 30};
+
+  if (frame >= total_frames) {
+    clear(); show();
+    current_mode = IDLE;
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  clear();
+  float pulse_phase = (float)(frame % 12) / 6.0f;
+  if (pulse_phase > 1.0f) pulse_phase = 2.0f - pulse_phase;
+  
+  float blink = pulse_phase * pulse_phase * (3.0f - 2.0f * pulse_phase);
+  blink = 0.15f + 0.85f * blink;
+  
+  if (frame >= total_frames - 12) blink *= 1.0f - (float)(frame - (total_frames - 12)) / 12.0f;
+  
+  for (int i = 0; i < LED_COUNT; i++) {
+    setPixel(i, fail_color.r * blink, fail_color.g * blink, fail_color.b * blink);
+  }
+  show();
+  frame++;
+}
+
+void tick_pairing() {
+  unsigned long now = millis();
+  if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
+  last_frame_ms = now;
+
+  clear();
+  // Yellow color for pairing
+  const LedColor wave_color = {255, 255, 0}; 
+  const float wave_width = 1.2f;
+  const int cycle = 32;
+  const int fade_in_frames = 12;
+  
+  float fade_in = frame < fade_in_frames ? (float)frame / (float)fade_in_frames : 1.0f;
+  fade_in = fade_in * fade_in * (3.0f - 2.0f * fade_in);
+  
+  int step = frame % cycle;
+  float wave_pos = step < cycle / 2 ? (float)step * 0.25f : (float)(cycle - step) * 0.25f;
+  
+  for (int i = 0; i < LED_COUNT; i++) {
+    float d = (float)i - wave_pos;
+    float intensity = expf(-d * d / (wave_width * wave_width));
+    intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
+    setPixel(i, wave_color.r * intensity, wave_color.g * intensity, wave_color.b * intensity);
+  }
+  show();
+  frame++;
+  // Notice there is no "exit" condition here. It loops infinitely until current_mode is changed!
+}
+
+// ==========================================
+// MAIN LOOP ENGINE
+// ==========================================
 void led_tick() {
   switch (current_mode) {
-
-    case CENTER_PULSE: {
-      const int total_frames = 80;
-      const int center = 2; // Middle LED for a 5-LED strip
-
-      if (frame >= total_frames) {
-        clear(); show();
-        current_mode = IDLE;
-        return;
-      }
-
-      unsigned long now = millis();
-      if (now - last_frame_ms < PULSE_FRAME_INTERVAL_MS) return;
-      last_frame_ms = now;
-
-      clear();
-
-      float wave_position = frame * 0.08f;
-      float width = 0.8f;
-
-      const int fade_in_frames = 20;
-      float fade_in = frame < fade_in_frames
-        ? pow((float)frame / fade_in_frames, 2.0f)
-        : 1.0f;
-
-      int color_idx = (frame * pulse_color_count) / total_frames % pulse_color_count;
-      LedColor base = pulse_colors[color_idx];
-
-      for (int i = 0; i < LED_COUNT; i++) {
-        float distance = abs(i - center);
-        float intensity = exp(-pow(distance - wave_position, 2) / width);
-        intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
-
-        setPixel(i, base.r * intensity, base.g * intensity, base.b * intensity);
-      }
-
-      show();
-      frame++;
-      break;
-    }
-
-    case REVERSE_CENTER_PULSE: {
-      const int movement_frames = 40; // Fast movement to match CENTER_PULSE
-      const int fade_out_frames = 10; // Quick fade at the end
-      const int total_frames = movement_frames + fade_out_frames;
-      
-      const int center = 2; 
-      const float max_distance = (float)(LED_COUNT - 1) / 2.0f;
-
-      if (frame >= total_frames) {
-        clear(); show();
-        current_mode = IDLE;
-        return;
-      }
-
-      unsigned long now = millis();
-      if (now - last_frame_ms < PULSE_FRAME_INTERVAL_MS) return;
-      last_frame_ms = now;
-
-      clear();
-
-      // 1. Calculate Wave Position
-      // Matches the 0.08f speed: (2.0 max distance / 0.08 speed = ~25-40 frames)
-      float progress = (float)min(frame, movement_frames) / (float)movement_frames;
-      float wave_position = max_distance * (1.0f - progress);
-      float width = 0.8f;
-
-      // 2. Intensity Modifiers
-      float intensity_mod = 1.0f;
-
-      // Quick Fade In (first 8 frames)
-      if (frame < 8) {
-        intensity_mod = pow((float)frame / 8.0f, 2.0f);
-      }
-      
-      // Quick Fade Out (last 10 frames)
-      if (frame >= movement_frames) {
-        float fade_out_progress = (float)(frame - movement_frames) / (float)fade_out_frames;
-        intensity_mod = (1.0f - fade_out_progress);
-      }
-
-      int color_idx = (frame * pulse_color_count) / total_frames % pulse_color_count;
-      LedColor base = pulse_colors[color_idx];
-
-      for (int i = 0; i < LED_COUNT; i++) {
-        float distance = abs(i - center);
-        float intensity = expf(-powf(distance - wave_position, 2) / width);
-        
-        // Apply the combined intensity and fade
-        intensity = constrain(intensity, 0.0f, 1.0f) * intensity_mod;
-
-        setPixel(i, base.r * intensity, base.g * intensity, base.b * intensity);
-      }
-
-      show();
-      frame++;
-      break;
-    }
-
-    case BOOT: {
-      const int total_frames = 40;
-      const LedColor boot_color = {255, 255, 255};
-
-      if (frame >= total_frames) {
-        current_mode = BOOT_FADE_OUT;
-        reset_timing();
-        return;
-      }
-
-      unsigned long now = millis();
-      if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
-      last_frame_ms = now;
-
-      clear();
-      float progress = (float)frame * (LED_COUNT + 0.8f) / total_frames;
-      for (int i = 0; i < LED_COUNT; i++) {
-        float t = progress - (float)i;
-        float intensity = t <= 0.0f ? 0.0f : (t >= 1.0f ? 1.0f : t * t * (3.0f - 2.0f * t));
-        setPixel(i, boot_color.r * intensity, boot_color.g * intensity, boot_color.b * intensity);
-      }
-      show();
-      frame++;
-      break;
-    }
-
-    case BOOT_FADE_OUT: {
-      const int fade_frames = 30;
-      const LedColor boot_color = {255, 255, 255};
-    
-      unsigned long now = millis();
-      if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
-      last_frame_ms = now;
-    
-      if (frame >= fade_frames) {
-        clear(); show();
-        current_mode = WIFI_CONNECTING;
-        reset_timing();
-        wifi_connecting_start_ms = millis();
-        return;
-      }
-    
-      float fade = 1.0f - ((float)frame / (float)(fade_frames - 1));
-      fade = fade * fade; // Smooth ease-out
-    
-      for (int i = 0; i < LED_COUNT; i++) {
-        setPixel(i, boot_color.r * fade, boot_color.g * fade, boot_color.b * fade);
-      }
-    
-      show();
-      frame++;
-      break;
-    }
-
-    case WIFI_CONNECTING: {
-      unsigned long now = millis();
-      if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
-      last_frame_ms = now;
-
-      if (network::is_connected()) {
-        current_mode = WIFI_SUCCESS;
-        reset_timing();
-        return;
-      }
-      if (now - wifi_connecting_start_ms > WIFI_CONNECT_TIMEOUT_MS) {
-        current_mode = WIFI_FAILURE;
-        reset_timing();
-        return;
-      }
-
-      clear();
-      const LedColor wave_color = {0, 0, 255};
-      const float wave_width = 1.2f;
-      const int cycle = 32;
-      const int fade_in_frames = 12;
-      
-      float fade_in = frame < fade_in_frames ? (float)frame / (float)fade_in_frames : 1.0f;
-      fade_in = fade_in * fade_in * (3.0f - 2.0f * fade_in);
-      
-      int step = frame % cycle;
-      float wave_pos = step < cycle / 2 ? (float)step * 0.25f : (float)(cycle - step) * 0.25f;
-      
-      for (int i = 0; i < LED_COUNT; i++) {
-        float d = (float)i - wave_pos;
-        float intensity = expf(-d * d / (wave_width * wave_width));
-        intensity = constrain(intensity, 0.0f, 1.0f) * fade_in;
-        setPixel(i, wave_color.r * intensity, wave_color.g * intensity, wave_color.b * intensity);
-      }
-      show();
-      frame++;
-      break;
-    }
-
-    case WIFI_SUCCESS: {
-      const int total_frames = 35;
-      const LedColor success_color = {0, 255, 0};
-
-      if (frame >= total_frames) {
-        clear(); show();
-        current_mode = IDLE;
-        return;
-      }
-
-      unsigned long now = millis();
-      if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
-      last_frame_ms = now;
-
-      clear();
-      float sweep = (float)frame * (LED_COUNT + 1.5f) / (total_frames - 8);
-      float fade_out = frame < total_frames - 10 ? 1.0f : 1.0f - (float)(frame - (total_frames - 10)) / 10.0f;
-      fade_out = fade_out * fade_out;
-      
-      for (int i = 0; i < LED_COUNT; i++) {
-        float t = sweep - (float)i;
-        float intensity = t <= 0.0f ? 0.0f : (t >= 1.2f ? 1.0f : (t >= 1.0f ? 1.0f : t * (2.0f - t)));
-        intensity *= fade_out;
-        setPixel(i, success_color.r * intensity, success_color.g * intensity, success_color.b * intensity);
-      }
-      show();
-      frame++;
-      break;
-    }
-
-    case WIFI_FAILURE: {
-      const int total_frames = 48;
-      const LedColor fail_color = {255, 0, 30};
-
-      if (frame >= total_frames) {
-        clear(); show();
-        current_mode = IDLE;
-        return;
-      }
-
-      unsigned long now = millis();
-      if (now - last_frame_ms < BOOT_WIFI_FRAME_INTERVAL_MS) return;
-      last_frame_ms = now;
-
-      clear();
-      float pulse_phase = (float)(frame % 12) / 6.0f;
-      if (pulse_phase > 1.0f) pulse_phase = 2.0f - pulse_phase;
-      
-      float blink = pulse_phase * pulse_phase * (3.0f - 2.0f * pulse_phase);
-      blink = 0.15f + 0.85f * blink;
-      
-      if (frame >= total_frames - 12) blink *= 1.0f - (float)(frame - (total_frames - 12)) / 12.0f;
-      
-      for (int i = 0; i < LED_COUNT; i++) {
-        setPixel(i, fail_color.r * blink, fail_color.g * blink, fail_color.b * blink);
-      }
-      show();
-      frame++;
-      break;
-    }
-
+    case CENTER_PULSE:         tick_center_pulse(); break;
+    case REVERSE_CENTER_PULSE: tick_reverse_center_pulse(); break;
+    case BOOT:                 tick_boot(); break;
+    case BOOT_FADE_OUT:        tick_boot_fade_out(); break;
+    case WIFI_CONNECTING:      tick_wifi_connecting(); break;
+    case WIFI_SUCCESS:         tick_wifi_success(); break;
+    case WIFI_FAILURE:         tick_wifi_failure(); break;
+    case PAIRING:              tick_pairing(); break; // <-- Add this line
     case IDLE:
     default:
-      break;
+      break; 
   }
 }
