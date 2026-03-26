@@ -7,6 +7,7 @@ esphome:
   platformio_options:
     lib_deps:
       - Xylopyrographer/LiteLED@3.0.1
+      - bblanchon/ArduinoJson@6.21.3 # Required to parse the MAC array
   on_boot:
     priority: 600
     then:
@@ -42,6 +43,29 @@ mqtt:
   broker: homeassistant.local
   username: !secret mqtt_username
   password: !secret mqtt_password
+  # 1. Fetch list on connection
+  on_connect:
+    - mqtt.publish:
+        topic: "esp_click/request_macs"
+        payload: "fetch"
+  # 2. Receive and update list dynamically 
+  on_json_message:
+    - topic: "esp_click/allowed_macs"
+      then:
+        - lambda: |-
+            known_macs.clear();
+            
+            // 1. MUST use JsonArrayConst for the variable type
+            // 2. MUST cast using .as<JsonArrayConst>()
+            JsonArrayConst macs = x["allowed_macs"].as<JsonArrayConst>();
+            
+            // 3. MUST use JsonVariantConst for the loop variable
+            for (JsonVariantConst v : macs) {
+              known_macs.push_back(v.as<std::string>());
+            }
+            
+            ESP_LOGI("esp_click", "Updated allowed MACs from HA. Total devices allowed: %d", known_macs.size());
+
 
 espnow:
   auto_add_peer: true
@@ -109,7 +133,7 @@ sensor:
       name: "VEML7700 Integration Time"
 
 # ====================
-# MOTION ENABLE SWITCH (HA)
+# SWITCHES
 # ====================
 switch:
   - platform: template
@@ -120,7 +144,6 @@ switch:
     turn_on_action:
       - globals.set: { id: motion_enabled, value: 'true' }
       - lambda: |-
-          // Optional: LED feedback when motion enabled via HA
           led_play_feedback_motion_on();
     turn_off_action:
       - globals.set: { id: motion_enabled, value: 'false' }
@@ -128,8 +151,18 @@ switch:
           id: radar_presence
           state: OFF
       - lambda: |-
-          // LED feedback when motion disabled via HA
           led_play_feedback_motion_off();
+
+  # NEW: ESP-NOW Pairing Mode Switch
+  - platform: template
+    name: "ESP-NOW Pairing Mode"
+    id: pairing_mode_switch
+    icon: mdi:bluetooth-connect
+    optimistic: true
+    turn_on_action:
+      - lambda: 'pairing_mode_active = true;'
+    turn_off_action:
+      - lambda: 'pairing_mode_active = false;'
 
 
 # ====================
@@ -153,8 +186,6 @@ binary_sensor:
     name: "Push Button"
 
     on_multi_click:
-
-      # SINGLE
       - timing:
           - ON for 50ms to 350ms
           - OFF for at least 200ms
@@ -166,7 +197,6 @@ binary_sensor:
               led_play_feedback_single();
           - logger.log: "Event Fired: Single Press"
 
-      # DOUBLE
       - timing:
           - ON for 50ms to 350ms
           - OFF for 50ms to 350ms
@@ -179,17 +209,12 @@ binary_sensor:
               led_play_feedback_double();
           - logger.log: "Event Fired: Double Press"
 
-      # LONG  ← YOUR TOGGLE
       - timing:
           - ON for at least 500ms
         then:
-
-          # toggle stored state
           - globals.set:
               id: motion_enabled
               value: !lambda 'return !id(motion_enabled);'
-
-          # if disabled → force radar OFF
           - if:
               condition:
                 lambda: 'return !id(motion_enabled);'
@@ -197,20 +222,15 @@ binary_sensor:
                 - binary_sensor.template.publish:
                     id: radar_presence
                     state: OFF
-
-          # fire HA event
           - event.trigger:
               id: button_event
               event_type: long_press
-
-          # LED feedback
           - lambda: |-
               if (id(motion_enabled)) {
                 led_play_feedback_motion_on();
               } else {
                 led_play_feedback_motion_off();
               }
-
           - logger.log:
               format: "Motion Enabled now: %s"
               args: ['id(motion_enabled) ? "TRUE" : "FALSE"']
