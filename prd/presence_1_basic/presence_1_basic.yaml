@@ -43,6 +43,7 @@ mqtt:
   broker: homeassistant.local
   username: !secret mqtt_username
   password: !secret mqtt_password
+  discovery: false # Disable HA discovery
   # 1. Fetch list on connection
   on_connect:
     - mqtt.publish:
