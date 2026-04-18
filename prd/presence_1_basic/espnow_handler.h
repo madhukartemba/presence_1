@@ -325,12 +325,20 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
     ack_msg.counter = msg.counter;
     ack_msg.success = true;
     esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
-  } else if (size == sizeof(Message)) {
-    auto msg = (const Message *)data;
+  }
+  // ---------------------------------------------------------
+  // PATH B: CLEARTEXT PAIRING REQUESTS
+  // ---------------------------------------------------------
+  else if (size == sizeof(Message)) {
 
-    // ==========================================
-    // NEW: Strict Downgrade Protection
-    // ==========================================
+    // 1. If we aren't pairing, drop all cleartext traffic immediately
+    if (!pairing_mode_active) {
+      // Using LOGD so it doesn't spam the console if a random device broadcasts
+      ESP_LOGD("esp_click", "Cleartext packet dropped. Pairing Mode is OFF.");
+      return;
+    }
+
+    // 2. Strict Downgrade Protection
     if (is_known) {
       ESP_LOGW("esp_click",
                "Strict Mode: Rejected cleartext packet from known device %s. "
@@ -339,22 +347,10 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       return;
     }
 
-    if (msg->type == DISCOVERY_REQUEST) {
-      AckMessage ack_msg;
-      ack_msg.counter = msg->counter;
-      ack_msg.success = true;
-      esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
-      return;
-    }
+    auto msg = (const Message *)data;
 
+    // 3. Process the Pairing Request
     if (msg->type == PAIRING_REQUEST) {
-      if (!pairing_mode_active) {
-        ESP_LOGW("esp_click",
-                 "Rejected Pairing Request from %s. Pairing Mode is OFF.",
-                 sender_mac.c_str());
-        return;
-      }
-
       ESP_LOGI("esp_click",
                "Pairing Request received from %s. Processing ECDH...",
                sender_mac.c_str());
