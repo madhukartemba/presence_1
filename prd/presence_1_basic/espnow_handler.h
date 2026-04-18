@@ -234,8 +234,12 @@ bool decrypt_packet(const EncryptedPacket *encrypted_packet,
 // Main ESP-NOW Handler
 // ==========================================
 void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
+
   std::string sender_mac = mac_to_str(addr);
   bool is_known = (known_devices.find(sender_mac) != known_devices.end());
+
+  ESP_LOGW("esp_click", "Received packet from %s (is_known=%s)",
+           sender_mac.c_str(), is_known ? "true" : "false");
 
   // ---------------------------------------------------------
   // PATH A: ENCRYPTED DATA PACKETS
