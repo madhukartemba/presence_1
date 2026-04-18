@@ -167,10 +167,8 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
         static const LedColor green = {0, 255, 0};
         led_play_reverse_center_wave(&green, 1);
         skip_button_led_feedback = true;
-// ==========================================
+        // ==========================================
 
-// NO HOME ASSISTANT REQUIRED: ESP builds the JSON and retains it on the broker
-#ifdef USE_MQTT
         if (mqtt::global_mqtt_client != nullptr &&
             mqtt::global_mqtt_client->is_connected()) {
           // Create a JSON document (ArduinoJson V7)
@@ -192,7 +190,6 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
               std::string("esp_click/allowed_macs"), json_str, 0, true);
           ESP_LOGI("esp_click", "Published updated master list to broker.");
         }
-#endif
       } else {
         ESP_LOGW("esp_click",
                  "Rejected unknown device: %s. Turn on Pairing Mode to allow.",
