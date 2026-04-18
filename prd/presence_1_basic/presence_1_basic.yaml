@@ -240,14 +240,14 @@ button:
     entity_category: config
     on_press:
       - lambda: |-
-          // Just wipe the MQTT Database. 
-          // The on_json_message block will automatically catch this, wipe local memory, and flash Red!
+          // Wipe the MQTT Database using the CORRECT topic and JSON key.
+          // The on_json_message block will now catch this, wipe local memory, and flash Red!
           #ifdef USE_MQTT
           if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
-              mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_macs"), std::string("{\"allowed_macs\":[]}"), 0, true);
+              mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_devices"), std::string("{\"allowed_devices\":[]}"), 0, true);
           }
           #endif
-      - logger.log: "Published empty MAC list to MQTT broker."
+      - logger.log: "Published empty device list to MQTT broker."
 
 
 # ====================
