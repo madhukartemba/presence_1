@@ -263,6 +263,20 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
     }
     known_devices[sender_mac].last_counter = msg.counter;
 
+    // ==========================================
+    // NEW: Handle Encrypted Discovery Pings
+    // ==========================================
+    if (msg.type == DISCOVERY_REQUEST) {
+      ESP_LOGD("esp_click",
+               "Received ENCRYPTED Discovery Ping from %s. Sending silent ACK.",
+               sender_mac.c_str());
+      AckMessage ack_msg;
+      ack_msg.counter = msg.counter;
+      ack_msg.success = true;
+      esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
+      return;
+    }
+
     // Process Decrypted Message
     if (mqtt::global_mqtt_client != nullptr &&
         mqtt::global_mqtt_client->is_connected()) {
@@ -311,13 +325,19 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
     ack_msg.counter = msg.counter;
     ack_msg.success = true;
     esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
-  }
-
-  // ---------------------------------------------------------
-  // PATH B: CLEARTEXT DISCOVERY & PAIRING
-  // ---------------------------------------------------------
-  else if (size == sizeof(Message)) {
+  } else if (size == sizeof(Message)) {
     auto msg = (const Message *)data;
+
+    // ==========================================
+    // NEW: Strict Downgrade Protection
+    // ==========================================
+    if (is_known) {
+      ESP_LOGW("esp_click",
+               "Strict Mode: Rejected cleartext packet from known device %s. "
+               "Possible downgrade attack.",
+               sender_mac.c_str());
+      return;
+    }
 
     if (msg->type == DISCOVERY_REQUEST) {
       AckMessage ack_msg;
