@@ -43,49 +43,58 @@ mqtt:
   broker: homeassistant.local
   username: !secret mqtt_username
   password: !secret mqtt_password
-  discovery: false # Disable HA discovery
-  # 1. Fetch list on connection
+  discovery: false
+  # Fetch list on connection
   on_connect:
     - mqtt.publish:
         topic: "esp_click/request_macs"
         payload: "fetch"
-  # 2. Receive and update list dynamically
+        
+  # Receive and update encrypted devices list dynamically
   on_json_message:
-    - topic: "esp_click/allowed_macs"
+    - topic: "esp_click/allowed_devices"
       then:
         - lambda: |-
-            // Static flag ensures we don't flash LEDs on the initial boot download
             static bool initial_sync_done = false;
             
-            int old_size = known_macs.size();
-            known_macs.clear();
+            int old_size = known_devices.size();
+            known_devices.clear();
             
-            JsonArrayConst macs = x["allowed_macs"].as<JsonArrayConst>();
-            for (JsonVariantConst v : macs) {
-              known_macs.push_back(v.as<std::string>());
+            JsonArrayConst devices = x["allowed_devices"].as<JsonArrayConst>();
+            for (JsonObjectConst dev : devices) {
+              std::string mac = dev["mac"].as<std::string>();
+              std::string key_hex = dev["key"].as<std::string>();
+              
+              DeviceKey dk;
+              dk.last_counter = 0;
+              
+              // Convert hex string back to byte array
+              if (key_hex.length() == 32) {
+                  for (int i = 0; i < 16; i++) {
+                      std::string byteString = key_hex.substr(i * 2, 2);
+                      dk.key[i] = (uint8_t)strtol(byteString.c_str(), NULL, 16);
+                  }
+                  known_devices[mac] = dk;
+              }
             }
             
-            int new_size = known_macs.size();
-            ESP_LOGI("esp_click", "Updated allowed MACs from HA. Total devices allowed: %d", new_size);
+            int new_size = known_devices.size();
+            ESP_LOGI("esp_click", "Updated secure devices list from HA. Total paired: %d", new_size);
 
-            // ==========================================
-            // NETWORK-WIDE LED NOTIFICATIONS
-            // ==========================================
+            // LED Feedback
             if (initial_sync_done) {
-              // If the list was wiped out: Flash Red
               if (new_size == 0 && old_size > 0) {
                 static const LedColor red = {255, 0, 0};
                 led_play_reverse_center_wave(&red, 1);
-              } 
-              // If the list grew: Flash Green
-              else if (new_size > old_size) {
+              } else if (new_size > old_size) {
                 static const LedColor green = {0, 255, 0};
                 led_play_reverse_center_wave(&green, 1);
               }
             }
             
-            // Mark the boot sync as complete
             initial_sync_done = true;
+
+# [Keep the rest of your ESPHome YAML unchanged (espnow, I2C, sensors, scripts, buttons)]
 
 espnow:
   auto_add_peer: true

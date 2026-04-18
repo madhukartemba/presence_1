@@ -1,13 +1,27 @@
 #include "esphome.h"
 #include <algorithm>
 #include <esp_now.h>
+#include <map>
 #include <string>
 #include <vector>
 
 // ==========================================
-// NEW: Security & Pairing Globals
+// NEW: Cryptography Includes
 // ==========================================
-std::vector<std::string> known_macs;
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/ecdh.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/gcm.h>
+
+// ==========================================
+// Security & Pairing Globals
+// ==========================================
+struct DeviceKey {
+  uint8_t key[16];
+  uint32_t last_counter = 0; // Prevent replay attacks
+};
+
+std::map<std::string, DeviceKey> known_devices;
 bool pairing_mode_active = false;
 
 // 1. Unified Enums
@@ -21,15 +35,20 @@ enum BatteryStatus {
 };
 
 // 2. Packed Structs
-enum MessageType { BUTTON_PRESS, BATTERY_STATUS, DISCOVERY_REQUEST };
+enum MessageType {
+  BUTTON_PRESS,
+  BATTERY_STATUS,
+  DISCOVERY_REQUEST,
+  PAIRING_REQUEST,
+  PAIRING_RESPONSE
+};
 
-// Application-level ACK structure MUST be packed
 struct __attribute__((packed)) AckMessage {
   uint32_t counter;
   bool success;
 };
 
-// Message structure MUST be packed
+// Cleartext Message structure
 struct __attribute__((packed)) Message {
   uint32_t counter;
   int deviceId = 0;
@@ -44,7 +63,22 @@ struct __attribute__((packed)) Message {
       int level;
       BatteryStatus status;
     } batteryLevel;
+
+    struct {
+      size_t keyLen;
+      uint8_t publicKey[65];
+    } pairing;
   } data;
+};
+
+// NEW: Encrypted Payload Structure
+#define AES_IV_LENGTH 12
+#define AES_TAG_LENGTH 16
+
+struct __attribute__((packed)) EncryptedPacket {
+  uint8_t iv[AES_IV_LENGTH];
+  uint8_t ciphertext[sizeof(Message)];
+  uint8_t tag[AES_TAG_LENGTH];
 };
 
 // Trackers
@@ -59,7 +93,15 @@ std::string mac_to_str(const uint8_t *mac) {
   return std::string(buf);
 }
 
-// Helper: Publish MQTT Discovery
+// Helper: Hex Array to String (for MQTT syncing)
+std::string hex_encode(const uint8_t *data, size_t len) {
+  char buf[len * 2 + 1];
+  for (size_t i = 0; i < len; ++i)
+    snprintf(buf + i * 2, 3, "%02x", data[i]);
+  return std::string(buf);
+}
+
+// Helper: Publish MQTT Discovery (Unchanged from your code)
 void publish_mqtt_discovery(const std::string &mac, int entity_id) {
   if (mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected())
@@ -69,12 +111,10 @@ void publish_mqtt_discovery(const std::string &mac, int entity_id) {
                             R"("],"name":"ESP Click )" + mac +
                             R"(","manufacturer":"ESP Click Project"})";
 
-  // 1. DEVICE LEVEL (Battery)
   if (std::find(discovered_macs.begin(), discovered_macs.end(), mac) ==
       discovered_macs.end()) {
     ESP_LOGI("esp_click", "Publishing HA Discovery for Device Battery: %s",
              mac.c_str());
-
     std::string bat_topic =
         "homeassistant/sensor/esp_click_" + mac + "/batt/config";
     std::string bat_payload =
@@ -94,14 +134,12 @@ void publish_mqtt_discovery(const std::string &mac, int entity_id) {
     discovered_macs.push_back(mac);
   }
 
-  // 2. ENTITY LEVEL (Buttons)
   std::string button_key = mac + "_" + std::to_string(entity_id);
   if (std::find(discovered_buttons.begin(), discovered_buttons.end(),
                 button_key) == discovered_buttons.end()) {
     ESP_LOGI("esp_click",
              "Publishing HA Discovery for Device Triggers: %s (Entity %d)",
              mac.c_str(), entity_id);
-
     std::string base_state_topic =
         "esp_click/" + mac + "/entity_" + std::to_string(entity_id) + "/event";
     std::string ha_subtype = "button_" + std::to_string(entity_id + 1);
@@ -137,70 +175,151 @@ void publish_mqtt_discovery(const std::string &mac, int entity_id) {
   }
 }
 
+// Sync current known devices to MQTT
+void publish_known_devices_to_mqtt() {
+  if (mqtt::global_mqtt_client != nullptr &&
+      mqtt::global_mqtt_client->is_connected()) {
+    JsonDocument doc;
+    JsonArray array = doc["allowed_devices"].to<JsonArray>();
+
+    for (const auto &pair : known_devices) {
+      JsonObject dev = array.add<JsonObject>();
+      dev["mac"] = pair.first;
+      dev["key"] = hex_encode(pair.second.key, 16);
+    }
+
+    std::string json_str;
+    serializeJson(doc, json_str);
+    mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_devices"),
+                                      json_str, 0, true);
+    ESP_LOGI("esp_click", "Published updated master device list to broker.");
+  }
+}
+
+// ==========================================
+// AES-GCM Decryption Helper
+// ==========================================
+bool decrypt_packet(const EncryptedPacket *encrypted_packet,
+                    const uint8_t *shared_key, Message *out_msg) {
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+
+  int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, shared_key, 128);
+  if (ret != 0) {
+    ESP_LOGE("esp_click", "Failed to set AES key");
+    mbedtls_gcm_free(&gcm);
+    return false;
+  }
+
+  ret = mbedtls_gcm_auth_decrypt(&gcm, sizeof(Message), encrypted_packet->iv,
+                                 AES_IV_LENGTH, NULL, 0, encrypted_packet->tag,
+                                 AES_TAG_LENGTH, encrypted_packet->ciphertext,
+                                 (unsigned char *)out_msg);
+
+  mbedtls_gcm_free(&gcm);
+
+  if (ret == MBEDTLS_ERR_GCM_AUTH_FAILED) {
+    ESP_LOGW("esp_click",
+             "AES-GCM Authentication Failed! Tampered packet or wrong key.");
+    return false;
+  } else if (ret != 0) {
+    ESP_LOGE("esp_click", "Decryption error: -0x%04X", -ret);
+    return false;
+  }
+
+  return true;
+}
+
+// ==========================================
+// Main ESP-NOW Handler
+// ==========================================
 void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
-  if (size == sizeof(Message)) {
-    auto msg = (const Message *)data;
-    if (msg->deviceId != 0)
-      return;
+  std::string sender_mac = mac_to_str(addr);
+  bool is_known = (known_devices.find(sender_mac) != known_devices.end());
 
-    std::string sender_mac = mac_to_str(addr);
-    // Pairing success already plays a green wave; skip button LED on the same
-    // packet so it is not overwritten.
-    bool skip_button_led_feedback = false;
-    // ==========================================
-    // NEW: SECURITY & AUTHENTICATION INTERCEPTOR
-    // ==========================================
-    bool is_known = (std::find(known_macs.begin(), known_macs.end(),
-                               sender_mac) != known_macs.end());
-
+  // ---------------------------------------------------------
+  // PATH A: ENCRYPTED DATA PACKETS
+  // ---------------------------------------------------------
+  if (size == sizeof(EncryptedPacket)) {
     if (!is_known) {
-      if (pairing_mode_active) {
-        ESP_LOGI("esp_click",
-                 "Pairing Mode ON. Accepting and pairing new device: %s",
-                 sender_mac.c_str());
-        known_macs.push_back(sender_mac);
+      ESP_LOGW("esp_click", "Rejected encrypted packet from unknown MAC: %s",
+               sender_mac.c_str());
+      return;
+    }
 
-        // ==========================================
-        // SUCCESSFUL PAIRING LED FEEDBACK
-        // ==========================================
-        static const LedColor green = {0, 255, 0};
-        led_play_reverse_center_wave(&green, 1);
-        skip_button_led_feedback = true;
+    auto encrypted_msg = (const EncryptedPacket *)data;
+    Message msg;
 
-        if (mqtt::global_mqtt_client != nullptr &&
-            mqtt::global_mqtt_client->is_connected()) {
-          // Create a JSON document (ArduinoJson V7)
-          JsonDocument doc;
-          JsonArray array = doc["allowed_macs"].to<JsonArray>();
+    if (!decrypt_packet(encrypted_msg, known_devices[sender_mac].key, &msg)) {
+      return; // Decryption failed, drop packet.
+    }
 
-          // Add all currently known MACs to the array
-          for (const auto &mac : known_macs) {
-            array.add(mac);
-          }
+    // Replay Attack Protection
+    if (msg.counter <= known_devices[sender_mac].last_counter &&
+        msg.counter != 0) {
+      ESP_LOGW("esp_click", "Replay attack detected from %s. Packet dropped.",
+               sender_mac.c_str());
+      return;
+    }
+    known_devices[sender_mac].last_counter = msg.counter;
 
-          // Serialize to string
-          std::string json_str;
-          serializeJson(doc, json_str);
-
-          // Publish with retain = true (the 'true' at the end is the magic
-          // part)
-          mqtt::global_mqtt_client->publish(
-              std::string("esp_click/allowed_macs"), json_str, 0, true);
-          ESP_LOGI("esp_click", "Published updated master list to broker.");
+    // Process Decrypted Message
+    if (mqtt::global_mqtt_client != nullptr &&
+        mqtt::global_mqtt_client->is_connected()) {
+      if (msg.type == BUTTON_PRESS) {
+        publish_mqtt_discovery(sender_mac, msg.data.buttonPress.buttonId);
+        std::string base_topic = "esp_click/" + sender_mac + "/entity_" +
+                                 std::to_string(msg.data.buttonPress.buttonId);
+        std::string payload;
+        switch (msg.data.buttonPress.event) {
+        case SINGLE_PRESS:
+          payload = "single";
+          static const LedColor blue = {0, 0, 255};
+          led_play_reverse_center_wave(&blue, 1);
+          break;
+        case DOUBLE_PRESS:
+          payload = "double";
+          static const LedColor magenta = {255, 0, 255};
+          led_play_reverse_center_wave(&magenta, 1);
+          break;
+        case LONG_PRESS:
+          payload = "long";
+          static const LedColor cyan = {0, 255, 255};
+          led_play_reverse_center_wave(&cyan, 1);
+          break;
+        default:
+          payload = "none";
+          break;
         }
-      } else {
-        ESP_LOGW("esp_click",
-                 "Rejected unknown device: %s. Turn on Pairing Mode to allow.",
-                 sender_mac.c_str());
-        return; // Drop packet
+        mqtt::global_mqtt_client->publish(base_topic + "/event", payload, 0,
+                                          false);
+        ESP_LOGI("esp_click", "[%s] Button %d: %s (Encrypted)",
+                 sender_mac.c_str(), msg.data.buttonPress.buttonId,
+                 payload.c_str());
+      } else if (msg.type == BATTERY_STATUS) {
+        std::string bat_base_topic = "esp_click/" + sender_mac;
+        mqtt::global_mqtt_client->publish(
+            bat_base_topic + "/battery_level",
+            std::to_string(msg.data.batteryLevel.level), 0, true);
+        ESP_LOGI("esp_click", "[%s] Battery: %d%% (Encrypted)",
+                 sender_mac.c_str(), msg.data.batteryLevel.level);
       }
     }
-    // ==========================================
 
-    // THE PING INTERCEPTOR
+    // Send ACK
+    AckMessage ack_msg;
+    ack_msg.counter = msg.counter;
+    ack_msg.success = true;
+    esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
+  }
+
+  // ---------------------------------------------------------
+  // PATH B: CLEARTEXT DISCOVERY & PAIRING
+  // ---------------------------------------------------------
+  else if (size == sizeof(Message)) {
+    auto msg = (const Message *)data;
+
     if (msg->type == DISCOVERY_REQUEST) {
-      ESP_LOGD("esp_click",
-               "Received Discovery Ping from MAC. Sending silent ACK.");
       AckMessage ack_msg;
       ack_msg.counter = msg->counter;
       ack_msg.success = true;
@@ -208,92 +327,86 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       return;
     }
 
-    if (mqtt::global_mqtt_client != nullptr &&
-        mqtt::global_mqtt_client->is_connected()) {
-
-      if (msg->type == BUTTON_PRESS) {
-        publish_mqtt_discovery(sender_mac, msg->data.buttonPress.buttonId);
-
-        std::string base_topic = "esp_click/" + sender_mac + "/entity_" +
-                                 std::to_string(msg->data.buttonPress.buttonId);
-        std::string payload;
-        switch (msg->data.buttonPress.event) {
-        case SINGLE_PRESS: {
-          payload = "single";
-          if (!skip_button_led_feedback) {
-            static const LedColor blue = {0, 0, 255};
-            led_play_reverse_center_wave(&blue, 1);
-          }
-          break;
-        }
-        case DOUBLE_PRESS: {
-          payload = "double";
-          if (!skip_button_led_feedback) {
-            static const LedColor magenta = {255, 0, 255};
-            led_play_reverse_center_wave(&magenta, 1);
-          }
-          break;
-        }
-        case LONG_PRESS: {
-          payload = "long";
-          if (!skip_button_led_feedback) {
-            static const LedColor cyan = {0, 255, 255};
-            led_play_reverse_center_wave(&cyan, 1);
-          }
-          break;
-        }
-        default:
-          payload = "none";
-          break;
-        }
-        mqtt::global_mqtt_client->publish(base_topic + "/event", payload, 0,
-                                          false);
-        ESP_LOGI("esp_click", "[%s] Button %d: %s Counter: %d",
-                 sender_mac.c_str(), msg->data.buttonPress.buttonId,
-                 payload.c_str(), msg->counter);
+    if (msg->type == PAIRING_REQUEST) {
+      if (!pairing_mode_active) {
+        ESP_LOGW("esp_click",
+                 "Rejected Pairing Request from %s. Pairing Mode is OFF.",
+                 sender_mac.c_str());
+        return;
       }
 
-      else if (msg->type == BATTERY_STATUS) {
-        std::string bat_base_topic = "esp_click/" + sender_mac;
+      ESP_LOGI("esp_click",
+               "Pairing Request received from %s. Processing ECDH...",
+               sender_mac.c_str());
 
-        std::string level_payload =
-            std::to_string(msg->data.batteryLevel.level);
-        mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_level",
-                                          level_payload, 0, true);
+      // 1. Initialize mbedTLS 3.x for ECDH
+      mbedtls_ecdh_context ecdh;
+      mbedtls_ctr_drbg_context ctr_drbg;
+      mbedtls_entropy_context entropy;
 
-        std::string status_payload;
-        switch (msg->data.batteryLevel.status) {
-        case CHARGING:
-          status_payload = "charging";
-          break;
-        case DISCHARGING:
-          status_payload = "discharging";
-          break;
-        case FULL_CHARGED:
-          status_payload = "full";
-          break;
-        case NOT_CONNECTED:
-          status_payload = "not_connected";
-          break;
-        case CHARGE_FAULT:
-          status_payload = "fault";
-          break;
-        default:
-          status_payload = "unknown";
-          break;
-        }
-        mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_status",
-                                          status_payload, 0, true);
-        ESP_LOGI("esp_click", "[%s] Battery: %s%% (%s) Counter: %d",
-                 sender_mac.c_str(), level_payload.c_str(),
-                 status_payload.c_str(), msg->counter);
+      mbedtls_ecdh_init(&ecdh);
+      mbedtls_ctr_drbg_init(&ctr_drbg);
+      mbedtls_entropy_init(&entropy);
+
+      const char *pers = "esp_click_rx_pairing";
+      mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
+                            (const unsigned char *)pers, strlen(pers));
+
+      if (mbedtls_ecdh_setup(&ecdh, MBEDTLS_ECP_DP_SECP256R1) != 0) {
+        ESP_LOGE("esp_click", "ECDH Setup Failed");
+        return;
       }
+
+      // 2. Read Sender's Public Key
+      if (mbedtls_ecdh_read_public(&ecdh, msg->data.pairing.publicKey,
+                                   msg->data.pairing.keyLen) != 0) {
+        ESP_LOGE("esp_click", "Failed to read sender public key");
+        return;
+      }
+
+      // 3. Generate Receiver's Key Pair & Response Message
+      Message responseMsg;
+      responseMsg.type = PAIRING_RESPONSE;
+      responseMsg.counter = msg->counter;
+
+      size_t olen = 0;
+      if (mbedtls_ecdh_make_public(&ecdh, &olen,
+                                   responseMsg.data.pairing.publicKey, 65,
+                                   mbedtls_ctr_drbg_random, &ctr_drbg) != 0) {
+        ESP_LOGE("esp_click", "Failed to generate receiver public key");
+        return;
+      }
+      responseMsg.data.pairing.keyLen = olen;
+
+      // 4. Calculate Shared Secret
+      uint8_t shared_secret[32];
+      size_t secret_len;
+      if (mbedtls_ecdh_calc_secret(&ecdh, &secret_len, shared_secret,
+                                   sizeof(shared_secret),
+                                   mbedtls_ctr_drbg_random, &ctr_drbg) == 0) {
+
+        // Success! Save the 16-byte AES key
+        DeviceKey new_dev;
+        memcpy(new_dev.key, shared_secret, 16);
+        new_dev.last_counter = 0;
+        known_devices[sender_mac] = new_dev;
+
+        // Send the Public Key response back to the sender
+        esp_now_send(addr, (uint8_t *)&responseMsg, sizeof(Message));
+
+        ESP_LOGI("esp_click", "Pairing Successful! Key established for %s",
+                 sender_mac.c_str());
+
+        static const LedColor green = {0, 255, 0};
+        led_play_reverse_center_wave(&green, 1);
+
+        // Sync the new secure map to HA MQTT
+        publish_known_devices_to_mqtt();
+      }
+
+      mbedtls_ecdh_free(&ecdh);
+      mbedtls_ctr_drbg_free(&ctr_drbg);
+      mbedtls_entropy_free(&entropy);
     }
-
-    // Send the ACK for the actual payload
-    AckMessage ack_msg;
-    ack_msg.counter = msg->counter;
-    ack_msg.success = true;
-    esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
   }
 }
