@@ -372,7 +372,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                             (const unsigned char *)pers, strlen(pers));
 
-      if (mbedtls_ecdh_setup(&ecdh, MBEDTLS_ECP_DP_SECP256R1) != 0) {
+      if (mbedtls_ecdh_setup(&ecdh, MBEDTLS_ECP_DP_CURVE25519) != 0) {
         ESP_LOGE("esp_click", "ECDH Setup Failed");
         return;
       }
