@@ -31,7 +31,6 @@ struct __attribute__((packed)) AckMessage {
 
 // Message structure MUST be packed
 struct __attribute__((packed)) Message {
-  uint32_t sessionId;
   uint32_t counter;
   int deviceId = 0;
   MessageType type;
