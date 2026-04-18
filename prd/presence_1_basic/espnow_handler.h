@@ -167,7 +167,6 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
         static const LedColor green = {0, 255, 0};
         led_play_reverse_center_wave(&green, 1);
         skip_button_led_feedback = true;
-        // ==========================================
 
         if (mqtt::global_mqtt_client != nullptr &&
             mqtt::global_mqtt_client->is_connected()) {
