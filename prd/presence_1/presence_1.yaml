@@ -168,7 +168,7 @@ sensor:
     actual_integration_time:
       name: "VEML7700 Integration Time"
   - platform: template
-    name: "Ambient Light (Lux)"
+    name: "Ambient Light"
     id: ambient_light_lux
     icon: mdi:brightness-6
     unit_of_measurement: lx
