@@ -356,6 +356,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
     Message msg;
 
     if (!decrypt_packet(encrypted_msg, known_devices[sender_mac].key, &msg)) {
+      ESP_LOGE("esp_click", "Decryption failed for %s", sender_mac.c_str());
       return; // Decryption failed, drop packet.
     }
 
