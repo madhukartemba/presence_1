@@ -13,13 +13,19 @@ using namespace esphome;
 // Smoothed in led_tick(); target updated from YAML when ambient_light reports.
 static float g_led_ambient_target = 1.0f;
 static float g_led_ambient_smoothed = 1.0f;
+static float g_last_ambient_lux = NAN;
+
+// Upper lux edge for full LED brightness; configurable from HA (see led_set_bright_lux_threshold).
+inline float g_led_bright_lux_threshold = 10.0f;
 
 inline float lux_to_led_scale(float lux) {
   // Dark room: dim indicators; bright room: full brightness for visibility.
   const float dark_lux = 0.0f;
-  const float bright_lux = 10.0f;
   const float min_scale = 0.10f;
   const float max_scale = 1.0f;
+  float bright_lux = g_led_bright_lux_threshold;
+  if (bright_lux <= dark_lux)
+    bright_lux = dark_lux + 0.5f;
   if (lux <= dark_lux)
     return min_scale;
   if (lux >= bright_lux)
@@ -29,9 +35,22 @@ inline float lux_to_led_scale(float lux) {
   return min_scale + t * (max_scale - min_scale);
 }
 
+inline void led_set_bright_lux_threshold(float lx) {
+  if (std::isnan(lx))
+    return;
+  if (lx < 0.5f)
+    lx = 0.5f;
+  if (lx > 2000.0f)
+    lx = 2000.0f;
+  g_led_bright_lux_threshold = lx;
+  if (!std::isnan(g_last_ambient_lux))
+    g_led_ambient_target = lux_to_led_scale(g_last_ambient_lux);
+}
+
 void led_set_ambient_lux(float lux) {
   if (std::isnan(lux))
     return;
+  g_last_ambient_lux = lux;
   g_led_ambient_target = lux_to_led_scale(lux);
 }
 

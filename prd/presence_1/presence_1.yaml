@@ -9,12 +9,16 @@ esphome:
       - Xylopyrographer/LiteLED@3.0.1
       - bblanchon/ArduinoJson@6.21.3 # Required to parse the MAC array
   on_boot:
-    priority: 600
-    then:
-      - globals.set: { id: motion_enabled, value: 'true' }
-      - lambda: |-
-          led_init();
-          led_play_boot();
+    - priority: 550
+      then:
+        - lambda: |-
+            led_set_bright_lux_threshold(id(led_bright_lux_max));
+    - priority: 600
+      then:
+        - globals.set: { id: motion_enabled, value: 'true' }
+        - lambda: |-
+            led_init();
+            led_play_boot();
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -72,6 +76,10 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'true'
+  - id: led_bright_lux_max
+    type: float
+    restore_value: true
+    initial_value: "10.0"
 
 interval:
   - interval: 12ms
@@ -139,21 +147,59 @@ sensor:
       name : Moving Distance
   - platform: veml7700
     address: 0x10
-    update_interval: 5s
+    update_interval: 1s
     ambient_light:
-      id: ambient_light_lux
-      name: "Ambient Light (Lux)"
+      name: "Ambient Light (internal)"
+      id: ambient_light_lux_internal
+      internal: true
       on_value:
         - lambda: |-
             led_set_ambient_lux(x);
     full_spectrum:
-      name: "Full Spectrum Light"
+      name: "Full Spectrum Light (internal)"
+      id: full_spectrum_lux_internal
+      internal: true
     infrared:
-      name: "Infrared Light"
+      name: "Infrared Light (internal)"
+      id: infrared_lux_internal
+      internal: true
     actual_gain:
       name: "VEML7700 Gain"
     actual_integration_time:
       name: "VEML7700 Integration Time"
+  - platform: template
+    name: "Ambient Light (Lux)"
+    id: ambient_light_lux
+    icon: mdi:brightness-6
+    unit_of_measurement: lx
+    device_class: illuminance
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 30s
+    lambda: |-
+      return id(ambient_light_lux_internal).state;
+  - platform: template
+    name: "Full Spectrum Light"
+    id: full_spectrum_lux
+    icon: mdi:brightness-7
+    unit_of_measurement: lx
+    device_class: illuminance
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 30s
+    lambda: |-
+      return id(full_spectrum_lux_internal).state;
+  - platform: template
+    name: "Infrared Light"
+    id: infrared_lux
+    icon: mdi:brightness-5
+    unit_of_measurement: lx
+    device_class: illuminance
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 30s
+    lambda: |-
+      return id(infrared_lux_internal).state;
 
 # ====================
 # SCRIPTS
@@ -377,3 +423,22 @@ number:
       name: Set Still Threshold Value
     move_threshold:
       name: Set Move Threshold Value
+  - platform: template
+    name: "LED full brightness at (lux)"
+    id: led_bright_lux_number
+    entity_category: config
+    icon: mdi:white-balance-sunny
+    unit_of_measurement: lx
+    min_value: 0.5
+    max_value: 2000
+    step: 0.5
+    mode: box
+    lambda: |-
+      return id(led_bright_lux_max);
+    set_action:
+      - lambda: |-
+          led_set_bright_lux_threshold(x);
+      - globals.set:
+          id: led_bright_lux_max
+          value: !lambda |-
+            return g_led_bright_lux_threshold;
