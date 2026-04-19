@@ -14,6 +14,9 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/gcm.h>
 
+// ESP-NOW receive path: encrypted app traffic (AES-GCM) vs cleartext pairing (ECDH only when pairing_mode_active).
+// Sender must use identical packed structs and IV rule: sessionId (8 LE) || counter (4 LE) for GCM nonce.
+
 // ==========================================
 // Security & Pairing Globals
 // ==========================================
@@ -25,7 +28,9 @@ struct DeviceKey {
   uint64_t session_history[4] = {};
 };
 
+// Key = sender MAC as 12 lowercase hex chars (see mac_to_str). Value synced via retained esp_click/allowed_devices.
 std::map<std::string, DeviceKey> known_devices;
+// Set by ESPHome template switch; when false, cleartext pairing frames are dropped.
 bool pairing_mode_active = false;
 
 // Pairing success requests YAML to turn off pairing_mode_switch (see interval).
@@ -52,6 +57,7 @@ enum MessageType {
   PAIRING_RESPONSE
 };
 
+// Plaintext app-level ACK; counter matches the encrypted Message so the clicker can correlate. Intentionally not encrypted.
 struct __attribute__((packed)) AckMessage {
   uint32_t counter;
   bool success;
@@ -81,10 +87,10 @@ struct __attribute__((packed)) Message {
   } data;
 };
 
-// NEW: Encrypted Payload Structure
 #define AES_IV_LENGTH 12
 #define AES_TAG_LENGTH 16
 
+// Wire format for post-pairing traffic; sizeof() distinguishes from cleartext Message in handle_espnow_packet.
 struct __attribute__((packed)) EncryptedPacket {
   uint8_t iv[AES_IV_LENGTH];
   uint8_t ciphertext[sizeof(Message)];
@@ -133,6 +139,7 @@ bool hex_decode_u64(const std::string &s, uint64_t *out) {
   return true;
 }
 
+// After decrypt: wire IV must equal sessionId||counter from plaintext (same rule the clicker uses to encrypt).
 static bool iv_matches_plaintext(const EncryptedPacket *ep, const Message *msg) {
   uint8_t expected[AES_IV_LENGTH];
   memcpy(expected, &msg->sessionId, sizeof(msg->sessionId));
@@ -140,6 +147,7 @@ static bool iv_matches_plaintext(const EncryptedPacket *ep, const Message *msg) 
   return memcmp(expected, ep->iv, AES_IV_LENGTH) == 0;
 }
 
+// Retired session IDs still reject replays after the clicker rotates rtcSessionId (FIFO of 4).
 static bool session_id_is_retired(const DeviceKey &dk, uint64_t sid) {
   for (int i = 0; i < 4; i++) {
     if (dk.session_history[i] == sid)
@@ -157,6 +165,7 @@ static void retire_current_session(DeviceKey &dk) {
   dk.current_session_id = 0;
 }
 
+// Updates last_counter and session tracking. New sessionId rotates current into history (see retire_current_session).
 // Returns false if replay, stale session, or invalid session id.
 static bool accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
                                        uint32_t counter) {
@@ -189,6 +198,7 @@ static bool accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
   return true;
 }
 
+// Publishes retained homeassistant/.../config topics once per (mac) and per (mac, entity_id); tracks discovered_* to dedupe.
 void publish_mqtt_discovery(const std::string &mac, int entity_id) {
   if (mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected())
@@ -262,7 +272,7 @@ void publish_mqtt_discovery(const std::string &mac, int entity_id) {
   }
 }
 
-// Sync current known devices to MQTT
+// Full snapshot to esp_click/allowed_devices (retained) so other presence nodes / HA stay in sync on anti-replay state.
 void publish_known_devices_to_mqtt() {
   if (mqtt::global_mqtt_client != nullptr &&
       mqtt::global_mqtt_client->is_connected()) {
@@ -291,6 +301,7 @@ void publish_known_devices_to_mqtt() {
 // ==========================================
 // AES-GCM Decryption Helper
 // ==========================================
+// out_msg size is fixed (packed Message); tag authenticates ciphertext + IV.
 bool decrypt_packet(const EncryptedPacket *encrypted_packet,
                     const uint8_t *shared_key, Message *out_msg) {
   mbedtls_gcm_context gcm;
@@ -326,12 +337,13 @@ bool decrypt_packet(const EncryptedPacket *encrypted_packet,
 // Main ESP-NOW Handler
 // ==========================================
 void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
+  // Packet type is inferred from size: EncryptedPacket vs cleartext Message (pairing only).
 
   std::string sender_mac = mac_to_str(addr);
   bool is_known = (known_devices.find(sender_mac) != known_devices.end());
 
   // ---------------------------------------------------------
-  // PATH A: ENCRYPTED DATA PACKETS
+  // PATH A: AES-GCM EncryptedPacket (known MAC only)
   // ---------------------------------------------------------
   if (size == sizeof(EncryptedPacket)) {
     if (!is_known) {
@@ -347,6 +359,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       return; // Decryption failed, drop packet.
     }
 
+    // Ensures nonce/ciphertext binding: IV cannot be swapped from another packet.
     if (!iv_matches_plaintext(encrypted_msg, &msg)) {
       ESP_LOGW("esp_click",
                "IV / plaintext mismatch for %s (session/counter vs wire IV).",
@@ -359,6 +372,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       return;
     }
 
+    // Discovery: ACK only; no publish_known_devices_to_mqtt (avoids retained churn; state still updated above).
     if (msg.type == DISCOVERY_REQUEST) {
       ESP_LOGD("esp_click",
                "Received ENCRYPTED Discovery Ping from %s. Sending silent ACK.",
@@ -370,7 +384,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       return;
     }
 
-    // ACK before MQTT: broker + JSON can exceed the sender's ACK timeout (~100ms).
+    // App-level ACK must precede MQTT: JSON publish + HA work can exceed the clicker's waitForAck window.
     {
       AckMessage ack_msg;
       ack_msg.counter = msg.counter;
@@ -378,9 +392,10 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
     }
 
+    // Button/battery only (not discovery); see publish_known_devices_to_mqtt comment.
     publish_known_devices_to_mqtt();
 
-    // Process Decrypted Message
+    // HA state topics + local LED feedback (requires MQTT for publish paths above).
     if (mqtt::global_mqtt_client != nullptr &&
         mqtt::global_mqtt_client->is_connected()) {
       if (msg.type == BUTTON_PRESS) {
@@ -424,9 +439,10 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
     }
   }
   // ---------------------------------------------------------
-  // PATH B: CLEARTEXT PAIRING REQUESTS
+  // PATH B: Cleartext Message (PAIRING_* only, pairing switch on)
   // ---------------------------------------------------------
   else if (size == sizeof(Message)) {
+    // Cleartext Message: only valid for PAIRING_REQUEST while pairing switch is on; sessionId must be 0 from sender.
 
     // 1. If we aren't pairing, drop all cleartext traffic immediately
     if (!pairing_mode_active) {
@@ -446,7 +462,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
 
     auto msg = (const Message *)data;
 
-    // 3. Process the Pairing Request
+    // ECDH Curve25519; first 16 bytes of shared secret become AES-128 key for subsequent EncryptedPackets.
     if (msg->type == PAIRING_REQUEST) {
       ESP_LOGI("esp_click",
                "Pairing Request received from %s. Processing ECDH...",
