@@ -45,47 +45,72 @@ mqtt:
   username: !secret mqtt_username
   password: !secret mqtt_password
   discovery: false # Disable HA discovery
-  # 1. Fetch list on connection
+  # Fetch list on connection
   on_connect:
     - mqtt.publish:
         topic: "esp_click/request_macs"
         payload: "fetch"
-  # 2. Receive and update list dynamically
+
+  # Receive and update encrypted devices list dynamically
   on_json_message:
-    - topic: "esp_click/allowed_macs"
+    - topic: "esp_click/allowed_devices"
       then:
         - lambda: |-
-            // Static flag ensures we don't flash LEDs on the initial boot download
             static bool initial_sync_done = false;
-            
-            int old_size = known_macs.size();
-            known_macs.clear();
-            
-            JsonArrayConst macs = x["allowed_macs"].as<JsonArrayConst>();
-            for (JsonVariantConst v : macs) {
-              known_macs.push_back(v.as<std::string>());
-            }
-            
-            int new_size = known_macs.size();
-            ESP_LOGI("esp_click", "Updated allowed MACs from HA. Total devices allowed: %d", new_size);
 
-            // ==========================================
-            // NETWORK-WIDE LED NOTIFICATIONS
-            // ==========================================
+            int old_size = known_devices.size();
+            known_devices.clear();
+
+            JsonArrayConst devices = x["allowed_devices"].as<JsonArrayConst>();
+            for (JsonObjectConst dev : devices) {
+              std::string mac = dev["mac"].as<std::string>();
+              std::string key_hex = dev["key"].as<std::string>();
+
+              DeviceKey dk;
+              dk.last_counter = 0;
+              dk.current_session_id = 0;
+              for (int hi = 0; hi < 4; hi++) dk.session_history[hi] = 0;
+
+              // Convert hex string back to byte array
+              if (key_hex.length() == 32) {
+                  for (int i = 0; i < 16; i++) {
+                      std::string byteString = key_hex.substr(i * 2, 2);
+                      dk.key[i] = (uint8_t)strtol(byteString.c_str(), NULL, 16);
+                  }
+                  if (dev.containsKey("last_counter"))
+                    dk.last_counter = dev["last_counter"].as<uint32_t>();
+                  if (dev.containsKey("current_session_id")) {
+                    std::string sid = dev["current_session_id"].as<std::string>();
+                    hex_decode_u64(sid, &dk.current_session_id);
+                  }
+                  if (dev.containsKey("session_history")) {
+                    JsonArrayConst hist = dev["session_history"].as<JsonArrayConst>();
+                    int idx = 0;
+                    for (JsonVariantConst hv : hist) {
+                      if (idx >= 4) break;
+                      std::string hs = hv.as<std::string>();
+                      hex_decode_u64(hs, &dk.session_history[idx]);
+                      idx++;
+                    }
+                  }
+                  known_devices[mac] = dk;
+              }
+            }
+
+            int new_size = known_devices.size();
+            ESP_LOGI("esp_click", "Updated secure devices list from HA. Total paired: %d", new_size);
+
+            // LED Feedback
             if (initial_sync_done) {
-              // If the list was wiped out: Flash Red
               if (new_size == 0 && old_size > 0) {
                 static const LedColor red = {255, 0, 0};
                 led_play_reverse_center_wave(&red, 1);
-              } 
-              // If the list grew: Flash Green
-              else if (new_size > old_size) {
+              } else if (new_size > old_size) {
                 static const LedColor green = {0, 255, 0};
                 led_play_reverse_center_wave(&green, 1);
               }
             }
-            
-            // Mark the boot sync as complete
+
             initial_sync_done = true;
 
 espnow:
@@ -113,6 +138,16 @@ interval:
     then:
       - lambda: |-
           led_tick();
+
+  - interval: 50ms
+    then:
+      - if:
+          condition:
+            lambda: return g_request_close_pairing_mode && pairing_mode_active;
+          then:
+            - lambda: |-
+                g_request_close_pairing_mode = false;
+            - switch.turn_off: pairing_mode_switch
 
 # --------------------
 # I2C
@@ -238,10 +273,14 @@ switch:
     turn_off_action:
       - lambda: 'pairing_mode_active = false;'
       - script.stop: pairing_mode_timer
-      # LED Feedback: Red wave indicates Pairing Mode is CLOSED (this overrides the infinite pairing loop)
-      - lambda: |-
-          static const LedColor red = {255, 0, 0};
-          led_play_reverse_center_wave(&red, 1);
+      - if:
+          condition:
+            lambda: return !g_pairing_close_skip_red_led;
+          then:
+            - lambda: |-
+                static const LedColor red = {255, 0, 0};
+                led_play_reverse_center_wave(&red, 1);
+      - lambda: 'g_pairing_close_skip_red_led = false;'
 
 
 # ====================
@@ -255,14 +294,14 @@ button:
     entity_category: config
     on_press:
       - lambda: |-
-          // Just wipe the MQTT Database. 
-          // The on_json_message block will automatically catch this, wipe local memory, and flash Red!
+          // Wipe the MQTT Database using the CORRECT topic and JSON key.
+          // The on_json_message block will now catch this, wipe local memory, and flash Red!
           #ifdef USE_MQTT
           if (mqtt::global_mqtt_client != nullptr && mqtt::global_mqtt_client->is_connected()) {
-              mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_macs"), std::string("{\"allowed_macs\":[]}"), 0, true);
+              mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_devices"), std::string("{\"allowed_devices\":[]}"), 0, true);
           }
           #endif
-      - logger.log: "Published empty MAC list to MQTT broker."
+      - logger.log: "Published empty device list to MQTT broker."
   - platform: ld2420
     apply_config:
       name: Apply Config
