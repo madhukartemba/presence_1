@@ -28,8 +28,10 @@ struct DeviceKey {
   uint64_t session_history[4] = {};
 };
 
-// Key = sender MAC as 12 lowercase hex chars (see mac_to_str). Value synced via retained esp_click/allowed_devices.
+// Key = sender MAC as 12 lowercase hex chars (see mac_to_str). Value synced via retained esp_click/device/<mac>.
 std::map<std::string, DeviceKey> known_devices;
+/// Set true after first MQTT device update (YAML); avoids LED flash on retained replay at boot.
+inline bool mqtt_paired_initial_sync_done = false;
 // Set by ESPHome template switch; when false, cleartext pairing frames are dropped.
 bool pairing_mode_active = false;
 
@@ -272,30 +274,167 @@ void publish_mqtt_discovery(const std::string &mac, int entity_id) {
   }
 }
 
-// Full snapshot to esp_click/allowed_devices (retained) so other presence nodes / HA stay in sync on anti-replay state.
-void publish_known_devices_to_mqtt() {
-  if (mqtt::global_mqtt_client != nullptr &&
-      mqtt::global_mqtt_client->is_connected()) {
-    JsonDocument doc;
-    JsonArray array = doc["allowed_devices"].to<JsonArray>();
+static constexpr const char MQTT_DEVICE_TOPIC_PREFIX[] = "esp_click/device/";
 
-    for (const auto &pair : known_devices) {
-      JsonObject dev = array.add<JsonObject>();
-      dev["mac"] = pair.first;
-      dev["key"] = hex_encode(pair.second.key, 16);
-      dev["last_counter"] = pair.second.last_counter;
-      dev["current_session_id"] = hex_encode_u64(pair.second.current_session_id);
-      JsonArray hist = dev["session_history"].to<JsonArray>();
-      for (int i = 0; i < 4; i++)
-        hist.add(hex_encode_u64(pair.second.session_history[i]));
+static std::string mqtt_device_topic(const std::string &mac) {
+  return std::string(MQTT_DEVICE_TOPIC_PREFIX) + mac;
+}
+
+// Subscribed in C++ so we get (topic, payload); YAML on_message only exposes payload as x.
+static void mqtt_on_device_topic(const std::string &topic, const std::string &payload) {
+  const size_t plen = strlen(MQTT_DEVICE_TOPIC_PREFIX);
+  if (topic.size() <= plen || topic.compare(0, plen, MQTT_DEVICE_TOPIC_PREFIX) != 0)
+    return;
+  std::string topic_mac = topic.substr(plen);
+
+  int old_size = (int)known_devices.size();
+
+  if (payload.empty()) {
+    if (known_devices.erase(topic_mac) > 0) {
+      ESP_LOGI("esp_click", "Removed device %s (MQTT retained delete)",
+               topic_mac.c_str());
+      if (mqtt_paired_initial_sync_done && old_size > 0 && known_devices.empty()) {
+        static const LedColor red = {255, 0, 0};
+        led_play_reverse_center_wave(&red, 1);
+      }
     }
-
-    std::string json_str;
-    serializeJson(doc, json_str);
-    mqtt::global_mqtt_client->publish(std::string("esp_click/allowed_devices"),
-                                      json_str, 0, true);
-    ESP_LOGI("esp_click", "Published updated master device list to broker.");
+    mqtt_paired_initial_sync_done = true;
+    return;
   }
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err)
+    return;
+  JsonObjectConst dev = doc.as<JsonObjectConst>();
+  std::string mac = dev["mac"].as<std::string>();
+  if (mac.empty())
+    mac = topic_mac;
+  std::string key_hex = dev["key"].as<std::string>();
+
+  DeviceKey dk;
+  dk.last_counter = 0;
+  dk.current_session_id = 0;
+  for (int hi = 0; hi < 4; hi++)
+    dk.session_history[hi] = 0;
+
+  if (key_hex.length() == 32) {
+    for (int i = 0; i < 16; i++) {
+      std::string byteString = key_hex.substr(i * 2, 2);
+      dk.key[i] = (uint8_t)strtol(byteString.c_str(), NULL, 16);
+    }
+    if (dev.containsKey("last_counter"))
+      dk.last_counter = dev["last_counter"].as<uint32_t>();
+    if (dev.containsKey("current_session_id")) {
+      std::string sid = dev["current_session_id"].as<std::string>();
+      hex_decode_u64(sid, &dk.current_session_id);
+    }
+    if (dev.containsKey("session_history")) {
+      JsonArrayConst hist = dev["session_history"].as<JsonArrayConst>();
+      int idx = 0;
+      for (JsonVariantConst hv : hist) {
+        if (idx >= 4)
+          break;
+        std::string hs = hv.as<std::string>();
+        hex_decode_u64(hs, &dk.session_history[idx]);
+        idx++;
+      }
+    }
+    known_devices[mac] = dk;
+  }
+
+  int new_size = (int)known_devices.size();
+  ESP_LOGI("esp_click", "Merged device %s from MQTT. Total paired: %d", mac.c_str(),
+           new_size);
+
+  if (mqtt_paired_initial_sync_done) {
+    if (new_size > old_size) {
+      static const LedColor green = {0, 255, 0};
+      led_play_reverse_center_wave(&green, 1);
+    }
+  }
+  mqtt_paired_initial_sync_done = true;
+}
+
+inline void mqtt_ensure_device_sync_subscription() {
+  static bool registered = false;
+  if (registered || mqtt::global_mqtt_client == nullptr)
+    return;
+  registered = true;
+  mqtt::global_mqtt_client->subscribe(
+      "esp_click/device/+",
+      [](const std::string &topic, const std::string &payload) {
+        mqtt_on_device_topic(topic, payload);
+      },
+      0);
+}
+
+// Retained JSON for one MAC (anti-replay state sync for other nodes / HA).
+static void publish_device_key_json_to_mqtt_(const std::string &mac,
+                                             const DeviceKey &dk) {
+  JsonDocument doc;
+  JsonObject dev = doc.to<JsonObject>();
+  dev["mac"] = mac;
+  dev["key"] = hex_encode(dk.key, 16);
+  dev["last_counter"] = dk.last_counter;
+  dev["current_session_id"] = hex_encode_u64(dk.current_session_id);
+  JsonArray hist = dev["session_history"].to<JsonArray>();
+  for (int i = 0; i < 4; i++)
+    hist.add(hex_encode_u64(dk.session_history[i]));
+
+  std::string json_str;
+  serializeJson(doc, json_str);
+  mqtt::global_mqtt_client->publish(mqtt_device_topic(mac), json_str, 0, true);
+}
+
+/// Publish only this MAC (e.g. after counter/session update on an encrypted packet).
+void publish_one_device_to_mqtt(const std::string &mac) {
+  mqtt_ensure_device_sync_subscription();
+  if (mqtt::global_mqtt_client == nullptr ||
+      !mqtt::global_mqtt_client->is_connected())
+    return;
+  auto it = known_devices.find(mac);
+  if (it == known_devices.end())
+    return;
+  publish_device_key_json_to_mqtt_(mac, it->second);
+}
+
+/// Full retained refresh (e.g. after new pairing).
+void publish_known_devices_to_mqtt() {
+  mqtt_ensure_device_sync_subscription();
+  if (mqtt::global_mqtt_client == nullptr ||
+      !mqtt::global_mqtt_client->is_connected())
+    return;
+
+  for (const auto &pair : known_devices)
+    publish_device_key_json_to_mqtt_(pair.first, pair.second);
+  ESP_LOGI("esp_click",
+           "Published device keys to esp_click/device/<mac> (retained).");
+}
+
+// Empty retained payload clears that topic on typical brokers; clears local map.
+void clear_all_paired_devices_mqtt() {
+  mqtt_ensure_device_sync_subscription();
+  if (mqtt::global_mqtt_client == nullptr ||
+      !mqtt::global_mqtt_client->is_connected())
+    return;
+
+  std::vector<std::string> macs;
+  macs.reserve(known_devices.size());
+  for (const auto &p : known_devices)
+    macs.push_back(p.first);
+
+  for (const auto &mac : macs)
+    mqtt::global_mqtt_client->publish(mqtt_device_topic(mac), std::string(), 0,
+                                      true);
+
+  known_devices.clear();
+  if (!macs.empty()) {
+    mqtt_paired_initial_sync_done = true;
+    static const LedColor red = {255, 0, 0};
+    led_play_reverse_center_wave(&red, 1);
+  }
+  ESP_LOGI("esp_click", "Cleared all paired devices (per-MQTT-topic delete).");
 }
 
 // ==========================================
@@ -393,8 +532,8 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
     }
 
-    // Button/battery only (not discovery); see publish_known_devices_to_mqtt comment.
-    publish_known_devices_to_mqtt();
+    // Button/battery only (not discovery): sync anti-replay state for this sender only.
+    publish_one_device_to_mqtt(sender_mac);
 
     // HA state topics + local LED feedback (requires MQTT for publish paths above).
     if (mqtt::global_mqtt_client != nullptr &&
