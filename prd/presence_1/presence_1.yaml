@@ -438,7 +438,4 @@ number:
     set_action:
       - lambda: |-
           led_set_bright_lux_threshold(x);
-      - globals.set:
-          id: led_bright_lux_max
-          value: !lambda |-
-            return g_led_bright_lux_threshold;
+          id(led_bright_lux_max) = g_led_bright_lux_threshold;
