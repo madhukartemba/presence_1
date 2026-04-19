@@ -1,5 +1,6 @@
 #include "esphome.h"
 #include <algorithm>
+#include <cstring>
 #include <esp_now.h>
 #include <map>
 #include <string>
@@ -18,7 +19,10 @@
 // ==========================================
 struct DeviceKey {
   uint8_t key[16];
-  uint32_t last_counter = 0; // Prevent replay attacks
+  uint32_t last_counter = 0; // Monotonic within current_session_id; synced over MQTT
+  uint64_t current_session_id = 0;
+  /// Last four retired session IDs (FIFO); must not accept replays using these.
+  uint64_t session_history[4] = {};
 };
 
 std::map<std::string, DeviceKey> known_devices;
@@ -51,6 +55,7 @@ struct __attribute__((packed)) AckMessage {
 // Cleartext Message structure
 struct __attribute__((packed)) Message {
   uint32_t counter;
+  uint64_t sessionId = 0; // 0 = pairing / plaintext; must match GCM IV when encrypted
   int deviceId = 0;
   MessageType type;
   union {
@@ -99,6 +104,84 @@ std::string hex_encode(const uint8_t *data, size_t len) {
   for (size_t i = 0; i < len; ++i)
     snprintf(buf + i * 2, 3, "%02x", data[i]);
   return std::string(buf);
+}
+
+std::string hex_encode_u64(uint64_t v) {
+  uint8_t b[8];
+  memcpy(b, &v, sizeof(v));
+  return hex_encode(b, sizeof(b));
+}
+
+bool hex_decode_u64(const std::string &s, uint64_t *out) {
+  if (s.length() != 16 || out == nullptr)
+    return false;
+  uint8_t b[8];
+  for (int i = 0; i < 8; i++) {
+    std::string byteString = s.substr(i * 2, 2);
+    char *end = nullptr;
+    unsigned long byte_val = strtoul(byteString.c_str(), &end, 16);
+    if (end != byteString.c_str() + 2 || byte_val > 255)
+      return false;
+    b[i] = (uint8_t)byte_val;
+  }
+  memcpy(out, b, sizeof(uint64_t));
+  return true;
+}
+
+static bool iv_matches_plaintext(const EncryptedPacket *ep, const Message *msg) {
+  uint8_t expected[AES_IV_LENGTH];
+  memcpy(expected, &msg->sessionId, sizeof(msg->sessionId));
+  memcpy(expected + sizeof(msg->sessionId), &msg->counter, sizeof(msg->counter));
+  return memcmp(expected, ep->iv, AES_IV_LENGTH) == 0;
+}
+
+static bool session_id_is_retired(const DeviceKey &dk, uint64_t sid) {
+  for (int i = 0; i < 4; i++) {
+    if (dk.session_history[i] == sid)
+      return true;
+  }
+  return false;
+}
+
+static void retire_current_session(DeviceKey &dk) {
+  if (dk.current_session_id == 0)
+    return;
+  memmove(dk.session_history + 1, dk.session_history,
+           3 * sizeof(uint64_t));
+  dk.session_history[0] = dk.current_session_id;
+  dk.current_session_id = 0;
+}
+
+/// Returns false if replay, stale session, or invalid session id.
+static bool accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
+                                       uint32_t counter) {
+  if (session_id == 0) {
+    ESP_LOGW("esp_click", "Rejecting encrypted packet: sessionId 0 invalid");
+    return false;
+  }
+
+  if (dk.current_session_id == session_id) {
+    if (counter <= dk.last_counter) {
+      ESP_LOGW("esp_click",
+               "Replay attack (counter) from session 0x%016llx. Dropped.",
+               (unsigned long long)session_id);
+      return false;
+    }
+    dk.last_counter = counter;
+    return true;
+  }
+
+  if (session_id_is_retired(dk, session_id)) {
+    ESP_LOGW("esp_click",
+             "Replay attack (retired session) 0x%016llx. Dropped.",
+             (unsigned long long)session_id);
+    return false;
+  }
+
+  retire_current_session(dk);
+  dk.current_session_id = session_id;
+  dk.last_counter = counter;
+  return true;
 }
 
 // Helper: Publish MQTT Discovery (Unchanged from your code)
@@ -186,6 +269,11 @@ void publish_known_devices_to_mqtt() {
       JsonObject dev = array.add<JsonObject>();
       dev["mac"] = pair.first;
       dev["key"] = hex_encode(pair.second.key, 16);
+      dev["last_counter"] = pair.second.last_counter;
+      dev["current_session_id"] = hex_encode_u64(pair.second.current_session_id);
+      JsonArray hist = dev["session_history"].to<JsonArray>();
+      for (int i = 0; i < 4; i++)
+        hist.add(hex_encode_u64(pair.second.session_history[i]));
     }
 
     std::string json_str;
@@ -238,9 +326,6 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
   std::string sender_mac = mac_to_str(addr);
   bool is_known = (known_devices.find(sender_mac) != known_devices.end());
 
-  ESP_LOGW("esp_click", "Received packet from %s (is_known=%s)",
-           sender_mac.c_str(), is_known ? "true" : "false");
-
   // ---------------------------------------------------------
   // PATH A: ENCRYPTED DATA PACKETS
   // ---------------------------------------------------------
@@ -258,18 +343,18 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       return; // Decryption failed, drop packet.
     }
 
-    // Replay Attack Protection
-    if (msg.counter <= known_devices[sender_mac].last_counter &&
-        msg.counter != 0) {
-      ESP_LOGW("esp_click", "Replay attack detected from %s. Packet dropped.",
+    if (!iv_matches_plaintext(encrypted_msg, &msg)) {
+      ESP_LOGW("esp_click",
+               "IV / plaintext mismatch for %s (session/counter vs wire IV).",
                sender_mac.c_str());
       return;
     }
-    known_devices[sender_mac].last_counter = msg.counter;
 
-    // ==========================================
-    // NEW: Handle Encrypted Discovery Pings
-    // ==========================================
+    if (!accept_session_and_counter(known_devices[sender_mac], msg.sessionId,
+                                    msg.counter)) {
+      return;
+    }
+
     if (msg.type == DISCOVERY_REQUEST) {
       ESP_LOGD("esp_click",
                "Received ENCRYPTED Discovery Ping from %s. Sending silent ACK.",
@@ -280,6 +365,16 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
       return;
     }
+
+    // ACK before MQTT: broker + JSON can exceed the sender's ACK timeout (~100ms).
+    {
+      AckMessage ack_msg;
+      ack_msg.counter = msg.counter;
+      ack_msg.success = true;
+      esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
+    }
+
+    publish_known_devices_to_mqtt();
 
     // Process Decrypted Message
     if (mqtt::global_mqtt_client != nullptr &&
@@ -323,12 +418,6 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
                  sender_mac.c_str(), msg.data.batteryLevel.level);
       }
     }
-
-    // Send ACK
-    AckMessage ack_msg;
-    ack_msg.counter = msg.counter;
-    ack_msg.success = true;
-    esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
   }
   // ---------------------------------------------------------
   // PATH B: CLEARTEXT PAIRING REQUESTS
@@ -388,6 +477,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       Message responseMsg;
       responseMsg.type = PAIRING_RESPONSE;
       responseMsg.counter = msg->counter;
+      responseMsg.sessionId = 0;
 
       size_t olen = 0;
       if (mbedtls_ecdh_make_public(&ecdh, &olen,
@@ -409,6 +499,8 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
         DeviceKey new_dev;
         memcpy(new_dev.key, shared_secret, 16);
         new_dev.last_counter = 0;
+        new_dev.current_session_id = 0;
+        memset(new_dev.session_history, 0, sizeof(new_dev.session_history));
         known_devices[sender_mac] = new_dev;
 
         // Send the Public Key response back to the sender

@@ -67,12 +67,30 @@ mqtt:
               
               DeviceKey dk;
               dk.last_counter = 0;
+              dk.current_session_id = 0;
+              for (int hi = 0; hi < 4; hi++) dk.session_history[hi] = 0;
               
               // Convert hex string back to byte array
               if (key_hex.length() == 32) {
                   for (int i = 0; i < 16; i++) {
                       std::string byteString = key_hex.substr(i * 2, 2);
                       dk.key[i] = (uint8_t)strtol(byteString.c_str(), NULL, 16);
+                  }
+                  if (dev.containsKey("last_counter"))
+                    dk.last_counter = dev["last_counter"].as<uint32_t>();
+                  if (dev.containsKey("current_session_id")) {
+                    std::string sid = dev["current_session_id"].as<std::string>();
+                    hex_decode_u64(sid, &dk.current_session_id);
+                  }
+                  if (dev.containsKey("session_history")) {
+                    JsonArrayConst hist = dev["session_history"].as<JsonArrayConst>();
+                    int idx = 0;
+                    for (JsonVariantConst hv : hist) {
+                      if (idx >= 4) break;
+                      std::string hs = hv.as<std::string>();
+                      hex_decode_u64(hs, &dk.session_history[idx]);
+                      idx++;
+                    }
                   }
                   known_devices[mac] = dk;
               }
