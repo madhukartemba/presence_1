@@ -16,6 +16,8 @@
 
 // ESP-NOW receive path: encrypted app traffic (AES-GCM) vs cleartext pairing (ECDH only when pairing_mode_active).
 // Sender must use identical packed structs and IV rule: sessionId (8 LE) || counter (4 LE) for GCM nonce.
+// Hub→clicker ACK (EncryptedAckPacket): same key, IV = sessionId (8 LE) || (~counter) (4 LE) — must not reuse the
+// request IV (GCM forbids same nonce for two plaintexts under one key).
 
 // ==========================================
 // Security & Pairing Globals
@@ -61,7 +63,7 @@ enum MessageType {
   PAIRING_RESPONSE
 };
 
-// Plaintext app-level ACK; counter matches the encrypted Message so the clicker can correlate. Intentionally not encrypted.
+// App-level ACK plaintext (encrypted on wire as EncryptedAckPacket for paired devices).
 struct __attribute__((packed)) AckMessage {
   uint32_t counter;
   bool success;
@@ -100,6 +102,21 @@ struct __attribute__((packed)) EncryptedPacket {
   uint8_t ciphertext[sizeof(Message)];
   uint8_t tag[AES_TAG_LENGTH];
 };
+
+// AES-GCM wire format for hub→paired-device ACK (sizeof distinguishes from EncryptedPacket / Message).
+struct __attribute__((packed)) EncryptedAckPacket {
+  uint8_t iv[AES_IV_LENGTH];
+  uint8_t ciphertext[sizeof(AckMessage)];
+  uint8_t tag[AES_TAG_LENGTH];
+};
+
+// GCM IV for hub→device ACK (differs from request IV which uses raw counter in last 4 bytes).
+static inline void build_ack_iv(uint64_t session_id, uint32_t counter,
+                                uint8_t iv[AES_IV_LENGTH]) {
+  memcpy(iv, &session_id, sizeof(session_id));
+  uint32_t ctr_flipped = ~counter;
+  memcpy(iv + sizeof(session_id), &ctr_flipped, sizeof(ctr_flipped));
+}
 
 // Trackers
 std::vector<std::string> discovered_macs;
@@ -475,6 +492,58 @@ bool decrypt_packet(const EncryptedPacket *encrypted_packet,
 }
 
 // ==========================================
+// AES-GCM encrypt (hub → paired device ACK)
+// ==========================================
+static bool encrypt_ack_packet(const AckMessage *plain, const uint8_t *shared_key,
+                               uint64_t session_id, uint32_t counter,
+                               EncryptedAckPacket *out) {
+  uint8_t iv[AES_IV_LENGTH];
+  build_ack_iv(session_id, counter, iv);
+  memcpy(out->iv, iv, AES_IV_LENGTH);
+
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+  if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, shared_key, 128) != 0) {
+    ESP_LOGE("esp_click", "encrypt_ack: setkey failed");
+    mbedtls_gcm_free(&gcm);
+    return false;
+  }
+
+  int ret = mbedtls_gcm_crypt_and_tag(
+      &gcm, MBEDTLS_GCM_ENCRYPT, sizeof(AckMessage), iv, AES_IV_LENGTH, NULL, 0,
+      (const unsigned char *)plain, out->ciphertext, AES_TAG_LENGTH, out->tag);
+
+  mbedtls_gcm_free(&gcm);
+
+  if (ret != 0) {
+    ESP_LOGE("esp_click", "encrypt_ack: gcm_crypt_and_tag failed: -0x%04X", -ret);
+    return false;
+  }
+  return true;
+}
+
+static void send_encrypted_ack_to_peer(const uint8_t *addr,
+                                       const std::string &sender_mac,
+                                       uint64_t session_id, uint32_t counter,
+                                       bool success) {
+  auto it = known_devices.find(sender_mac);
+  if (it == known_devices.end())
+    return;
+  AckMessage ack;
+  ack.counter = counter;
+  ack.success = success;
+  EncryptedAckPacket pkt;
+  if (!encrypt_ack_packet(&ack, it->second.key, session_id, counter, &pkt))
+  {
+    ESP_LOGW("esp_click", "encrypt_ack_packet failed for %s", sender_mac.c_str());
+    return;
+  }
+  esp_err_t err = esp_now_send(addr, (uint8_t *)&pkt, sizeof(pkt));
+  if (err != ESP_OK)
+    ESP_LOGW("esp_click", "esp_now_send encrypted ACK failed: %s", esp_err_to_name(err));
+}
+
+// ==========================================
 // Main ESP-NOW Handler
 // ==========================================
 void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
@@ -519,20 +588,14 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       ESP_LOGD("esp_click",
                "Received ENCRYPTED Discovery Ping from %s. Sending silent ACK.",
                sender_mac.c_str());
-      AckMessage ack_msg;
-      ack_msg.counter = msg.counter;
-      ack_msg.success = true;
-      esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
+      send_encrypted_ack_to_peer(addr, sender_mac, msg.sessionId, msg.counter,
+                                 true);
       return;
     }
 
     // App-level ACK must precede MQTT: JSON publish + HA work can exceed the clicker's waitForAck window.
-    {
-      AckMessage ack_msg;
-      ack_msg.counter = msg.counter;
-      ack_msg.success = true;
-      esp_now_send(addr, (uint8_t *)&ack_msg, sizeof(ack_msg));
-    }
+    send_encrypted_ack_to_peer(addr, sender_mac, msg.sessionId, msg.counter,
+                               true);
 
     // Button/battery only (not discovery): sync anti-replay state for this sender only.
     publish_one_device_to_mqtt(sender_mac);
