@@ -61,7 +61,8 @@ enum MessageType {
   BATTERY_STATUS,
   DISCOVERY_REQUEST,
   PAIRING_REQUEST,
-  PAIRING_RESPONSE
+  PAIRING_RESPONSE,
+  UNPAIR_REQUEST,
 };
 
 enum AckReason : uint8_t {
@@ -307,6 +308,38 @@ static constexpr const char MQTT_DEVICE_TOPIC_PREFIX[] = "esp_click/device/";
 
 static std::string mqtt_device_topic(const std::string &mac) {
   return std::string(MQTT_DEVICE_TOPIC_PREFIX) + mac;
+}
+
+// Drops one MAC from known_devices, clears retained esp_click/device/<mac>, trims HA discovery caches.
+static void remove_paired_device_from_hub(const std::string &mac) {
+  mqtt_ensure_device_sync_subscription();
+  int old_size = (int)known_devices.size();
+  if (known_devices.erase(mac) == 0)
+    return;
+
+  discovered_macs.erase(std::remove(discovered_macs.begin(), discovered_macs.end(), mac),
+                        discovered_macs.end());
+  const std::string btn_prefix = mac + "_";
+  discovered_buttons.erase(
+      std::remove_if(discovered_buttons.begin(), discovered_buttons.end(),
+                     [&](const std::string &k) {
+                       return k.size() >= btn_prefix.size() &&
+                              k.compare(0, btn_prefix.size(), btn_prefix) == 0;
+                     }),
+      discovered_buttons.end());
+
+  if (mqtt::global_mqtt_client != nullptr &&
+      mqtt::global_mqtt_client->is_connected())
+    mqtt::global_mqtt_client->publish(mqtt_device_topic(mac), std::string(), 0,
+                                      true);
+
+  ESP_LOGI("esp_click", "Removed paired device %s (UNPAIR_REQUEST)", mac.c_str());
+
+  if (mqtt_paired_initial_sync_done && old_size > 0 && known_devices.empty()) {
+    static const LedColor red = {255, 0, 0};
+    led_play_reverse_center_wave(&red, 1);
+  }
+  mqtt_paired_initial_sync_done = true;
 }
 
 // Subscribed in C++ so we get (topic, payload); YAML on_message only exposes payload as x.
@@ -606,6 +639,15 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
                sender_mac.c_str());
       send_encrypted_ack_to_peer(addr, sender_mac, msg.sessionId, msg.counter,
                                  true);
+      return;
+    }
+
+    if (msg.type == UNPAIR_REQUEST) {
+      ESP_LOGI("esp_click", "UNPAIR_REQUEST from %s — ACK then remove from MQTT",
+               sender_mac.c_str());
+      send_encrypted_ack_to_peer(addr, sender_mac, msg.sessionId, msg.counter,
+                                 true);
+      remove_paired_device_from_hub(sender_mac);
       return;
     }
 
