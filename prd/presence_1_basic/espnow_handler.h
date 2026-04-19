@@ -17,7 +17,8 @@
 // ESP-NOW receive path: encrypted app traffic (AES-GCM) vs cleartext pairing (ECDH only when pairing_mode_active).
 // Sender must use identical packed structs and IV rule: sessionId (8 LE) || counter (4 LE) for GCM nonce.
 // Hub→clicker ACK (EncryptedAckPacket): same key, IV = sessionId (8 LE) || (~counter) (4 LE) — must not reuse the
-// request IV (GCM forbids same nonce for two plaintexts under one key).
+// request IV (GCM forbids same nonce for two plaintexts under one key). Plaintext AckMessage: counter, sessionId,
+// success, reason (AckReason: ACK_OK, ACK_SESSION_ID_ZERO, ACK_REPLAY_COUNTER, ACK_SESSION_RETIRED on failure).
 
 // ==========================================
 // Security & Pairing Globals
@@ -63,10 +64,19 @@ enum MessageType {
   PAIRING_RESPONSE
 };
 
+enum AckReason : uint8_t {
+  ACK_OK = 0,
+  ACK_SESSION_ID_ZERO = 1,
+  ACK_REPLAY_COUNTER = 2,
+  ACK_SESSION_RETIRED = 3,
+};
+
 // App-level ACK plaintext (encrypted on wire as EncryptedAckPacket for paired devices).
 struct __attribute__((packed)) AckMessage {
   uint32_t counter;
+  uint64_t sessionId = 0;
   bool success;
+  AckReason reason = ACK_OK;
 };
 
 // Cleartext Message structure
@@ -187,12 +197,12 @@ static void retire_current_session(DeviceKey &dk) {
 }
 
 // Updates last_counter and session tracking. New sessionId rotates current into history (see retire_current_session).
-// Returns false if replay, stale session, or invalid session id.
-static bool accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
-                                       uint32_t counter) {
+// Returns ACK_OK on success; otherwise a reason for encrypted failure ACK to the sender.
+static AckReason accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
+                                            uint32_t counter) {
   if (session_id == 0) {
     ESP_LOGW("esp_click", "Rejecting encrypted packet: sessionId 0 invalid");
-    return false;
+    return ACK_SESSION_ID_ZERO;
   }
 
   if (dk.current_session_id == session_id) {
@@ -200,23 +210,23 @@ static bool accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
       ESP_LOGW("esp_click",
                "Replay attack (counter) from session 0x%016llx. Dropped.",
                (unsigned long long)session_id);
-      return false;
+      return ACK_REPLAY_COUNTER;
     }
     dk.last_counter = counter;
-    return true;
+    return ACK_OK;
   }
 
   if (session_id_is_retired(dk, session_id)) {
     ESP_LOGW("esp_click",
              "Replay attack (retired session) 0x%016llx. Dropped.",
              (unsigned long long)session_id);
-    return false;
+    return ACK_SESSION_RETIRED;
   }
 
   retire_current_session(dk);
   dk.current_session_id = session_id;
   dk.last_counter = counter;
-  return true;
+  return ACK_OK;
 }
 
 // Publishes retained homeassistant/.../config topics once per (mac) and per (mac, entity_id); tracks discovered_* to dedupe.
@@ -525,16 +535,18 @@ static bool encrypt_ack_packet(const AckMessage *plain, const uint8_t *shared_ke
 static void send_encrypted_ack_to_peer(const uint8_t *addr,
                                        const std::string &sender_mac,
                                        uint64_t session_id, uint32_t counter,
-                                       bool success) {
+                                       bool success,
+                                       AckReason fail_reason = ACK_OK) {
   auto it = known_devices.find(sender_mac);
   if (it == known_devices.end())
     return;
   AckMessage ack;
   ack.counter = counter;
+  ack.sessionId = session_id;
   ack.success = success;
+  ack.reason = success ? ACK_OK : fail_reason;
   EncryptedAckPacket pkt;
-  if (!encrypt_ack_packet(&ack, it->second.key, session_id, counter, &pkt))
-  {
+  if (!encrypt_ack_packet(&ack, it->second.key, session_id, counter, &pkt)) {
     ESP_LOGW("esp_click", "encrypt_ack_packet failed for %s", sender_mac.c_str());
     return;
   }
@@ -578,8 +590,12 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
       return;
     }
 
-    if (!accept_session_and_counter(known_devices[sender_mac], msg.sessionId,
-                                    msg.counter)) {
+    AckReason session_result =
+        accept_session_and_counter(known_devices[sender_mac], msg.sessionId,
+                                   msg.counter);
+    if (session_result != ACK_OK) {
+      send_encrypted_ack_to_peer(addr, sender_mac, msg.sessionId, msg.counter,
+                                 false, session_result);
       return;
     }
 
