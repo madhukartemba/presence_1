@@ -117,9 +117,13 @@ event:
 sensor:
   - platform: veml7700
     address: 0x10
-    update_interval: 30s
+    update_interval: 5s
     ambient_light:
+      id: ambient_light_lux
       name: "Ambient Light (Lux)"
+      on_value:
+        - lambda: |-
+            led_set_ambient_lux(x);
     full_spectrum:
       name: "Full Spectrum Light"
     infrared:

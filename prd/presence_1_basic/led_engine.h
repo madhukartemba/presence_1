@@ -8,6 +8,39 @@
 using namespace esphome;
 
 // ==========================================
+// AMBIENT AUTO-BRIGHTNESS (VEML7700 lux → multiplier)
+// ==========================================
+// Smoothed in led_tick(); target updated from YAML when ambient_light reports.
+static float g_led_ambient_target = 1.0f;
+static float g_led_ambient_smoothed = 1.0f;
+
+inline float lux_to_led_scale(float lux) {
+  // Dark room: dim indicators; bright room: full brightness for visibility.
+  const float dark_lux = 0.0f;
+  const float bright_lux = 10.0f;
+  const float min_scale = 0.10f;
+  const float max_scale = 1.0f;
+  if (lux <= dark_lux)
+    return min_scale;
+  if (lux >= bright_lux)
+    return max_scale;
+  float t = (lux - dark_lux) / (bright_lux - dark_lux);
+  t = t * t * (3.0f - 2.0f * t);
+  return min_scale + t * (max_scale - min_scale);
+}
+
+void led_set_ambient_lux(float lux) {
+  if (std::isnan(lux))
+    return;
+  g_led_ambient_target = lux_to_led_scale(lux);
+}
+
+inline void led_update_ambient_smoothing() {
+  const float alpha = 0.12f;
+  g_led_ambient_smoothed += alpha * (g_led_ambient_target - g_led_ambient_smoothed);
+}
+
+// ==========================================
 // CONFIGURATION
 // ==========================================
 #define LED_PIN 6
@@ -73,7 +106,10 @@ inline void end_feedback_wave_or_resume_pairing() {
 }
 
 inline void setPixel(int i, uint8_t r, uint8_t g, uint8_t b) {
-  rgb_t c = { r, g, b };   // Standard RGB order
+  float m = g_led_ambient_smoothed;
+  rgb_t c = { (uint8_t) constrain((int) lroundf((float) r * m), 0, 255),
+              (uint8_t) constrain((int) lroundf((float) g * m), 0, 255),
+              (uint8_t) constrain((int) lroundf((float) b * m), 0, 255) };
   strip.setPixel(i, c, false);
 }
 
@@ -392,6 +428,7 @@ void tick_pairing() {
 // MAIN LOOP ENGINE
 // ==========================================
 void led_tick() {
+  led_update_ambient_smoothing();
   switch (current_mode) {
     case CENTER_PULSE:         tick_center_pulse(); break;
     case REVERSE_CENTER_PULSE: tick_reverse_center_pulse(); break;
