@@ -151,8 +151,8 @@ script:
             switch.is_on: pairing_mode_switch
           then:
             - lambda: |-
-                static const LedColor yellow = {255, 255, 0};
-                led_play_reverse_center_wave(&yellow, 1);
+                static const LedColor magenta = {255, 0, 255};
+                led_play_reverse_center_wave(&magenta, 1);
             # Wait 2 seconds before firing the next wave (acts like a heartbeat pulse)
             - delay: 2s
 

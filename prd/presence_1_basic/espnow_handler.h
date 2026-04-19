@@ -20,12 +20,14 @@
 // ==========================================
 // Security & Pairing Globals
 // ==========================================
+static constexpr size_t SESSION_HISTORY_LEN = 16;
+
 struct DeviceKey {
   uint8_t key[16];
   uint32_t last_counter = 0; // Monotonic within current_session_id; synced over MQTT
   uint64_t current_session_id = 0;
-  /// Last four retired session IDs (FIFO); must not accept replays using these.
-  uint64_t session_history[4] = {};
+  /// Retired session IDs (FIFO); must not accept replays using these.
+  uint64_t session_history[SESSION_HISTORY_LEN] = {};
 };
 
 // Key = sender MAC as 12 lowercase hex chars (see mac_to_str). Value synced via retained esp_click/device/<mac>.
@@ -149,9 +151,9 @@ static bool iv_matches_plaintext(const EncryptedPacket *ep, const Message *msg) 
   return memcmp(expected, ep->iv, AES_IV_LENGTH) == 0;
 }
 
-// Retired session IDs still reject replays after the clicker rotates rtcSessionId (FIFO of 4).
+// Retired session IDs still reject replays after the clicker rotates rtcSessionId (FIFO).
 static bool session_id_is_retired(const DeviceKey &dk, uint64_t sid) {
-  for (int i = 0; i < 4; i++) {
+  for (size_t i = 0; i < SESSION_HISTORY_LEN; i++) {
     if (dk.session_history[i] == sid)
       return true;
   }
@@ -162,7 +164,7 @@ static void retire_current_session(DeviceKey &dk) {
   if (dk.current_session_id == 0)
     return;
   memmove(dk.session_history + 1, dk.session_history,
-           3 * sizeof(uint64_t));
+           (SESSION_HISTORY_LEN - 1) * sizeof(uint64_t));
   dk.session_history[0] = dk.current_session_id;
   dk.current_session_id = 0;
 }
@@ -315,7 +317,7 @@ static void mqtt_on_device_topic(const std::string &topic, const std::string &pa
   DeviceKey dk;
   dk.last_counter = 0;
   dk.current_session_id = 0;
-  for (int hi = 0; hi < 4; hi++)
+  for (size_t hi = 0; hi < SESSION_HISTORY_LEN; hi++)
     dk.session_history[hi] = 0;
 
   if (key_hex.length() == 32) {
@@ -333,7 +335,7 @@ static void mqtt_on_device_topic(const std::string &topic, const std::string &pa
       JsonArrayConst hist = dev["session_history"].as<JsonArrayConst>();
       int idx = 0;
       for (JsonVariantConst hv : hist) {
-        if (idx >= 4)
+        if (idx >= (int)SESSION_HISTORY_LEN)
           break;
         std::string hs = hv.as<std::string>();
         hex_decode_u64(hs, &dk.session_history[idx]);
@@ -379,7 +381,7 @@ static void publish_device_key_json_to_mqtt_(const std::string &mac,
   dev["last_counter"] = dk.last_counter;
   dev["current_session_id"] = hex_encode_u64(dk.current_session_id);
   JsonArray hist = dev["session_history"].to<JsonArray>();
-  for (int i = 0; i < 4; i++)
+  for (size_t i = 0; i < SESSION_HISTORY_LEN; i++)
     hist.add(hex_encode_u64(dk.session_history[i]));
 
   std::string json_str;
@@ -546,18 +548,18 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
         switch (msg.data.buttonPress.event) {
         case SINGLE_PRESS:
           payload = "single";
-          static const LedColor blue = {0, 0, 255};
-          led_play_reverse_center_wave(&blue, 1);
+          static const LedColor white = {255, 255, 255};
+          led_play_reverse_center_wave(&white, 1);
           break;
         case DOUBLE_PRESS:
           payload = "double";
-          static const LedColor magenta = {255, 0, 255};
-          led_play_reverse_center_wave(&magenta, 1);
+          static const LedColor yellow = {255, 255, 0};
+          led_play_reverse_center_wave(&yellow, 1);
           break;
         case LONG_PRESS:
           payload = "long";
-          static const LedColor cyan = {0, 255, 255};
-          led_play_reverse_center_wave(&cyan, 1);
+          static const LedColor blue = {0, 0, 255};
+          led_play_reverse_center_wave(&blue, 1);
           break;
         default:
           payload = "none";

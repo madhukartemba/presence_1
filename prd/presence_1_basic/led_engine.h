@@ -32,7 +32,7 @@ enum AnimationMode {
   PAIRING
 };
 
-// Defined in espnow_handler.h — feedback waves resume yellow pairing when this stays true.
+// Defined in espnow_handler.h — feedback waves resume magenta pairing when this stays true.
 extern bool pairing_mode_active;
 
 // ==========================================
@@ -109,13 +109,13 @@ void led_play_reverse_center_wave(const LedColor* colors, int num_colors) {
 }
 
 void led_play_feedback_single() {
-  static const LedColor blue = {0, 0, 255};
-  led_play_center_wave(&blue, 1);
+  static const LedColor white = {255, 255, 255};
+  led_play_center_wave(&white, 1);
 }
 
 void led_play_feedback_double() {
-  static const LedColor magenta = {255, 0, 255};
-  led_play_center_wave(&magenta, 1);
+  static const LedColor yellow = {255, 255, 0};
+  led_play_center_wave(&yellow, 1);
 }
 
 void led_play_feedback_motion_on() {
@@ -365,8 +365,8 @@ void tick_pairing() {
   last_frame_ms = now;
 
   clear();
-  // Yellow color for pairing
-  const LedColor wave_color = {255, 255, 0}; 
+  // Magenta color for pairing
+  const LedColor wave_color = {255, 0, 255}; 
   const float wave_width = 1.2f;
   const int cycle = 32;
   const int fade_in_frames = 12;
