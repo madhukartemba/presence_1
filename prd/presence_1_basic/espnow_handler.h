@@ -152,7 +152,7 @@ static void retire_current_session(DeviceKey &dk) {
   dk.current_session_id = 0;
 }
 
-/// Returns false if replay, stale session, or invalid session id.
+// Returns false if replay, stale session, or invalid session id.
 static bool accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
                                        uint32_t counter) {
   if (session_id == 0) {
@@ -184,7 +184,6 @@ static bool accept_session_and_counter(DeviceKey &dk, uint64_t session_id,
   return true;
 }
 
-// Helper: Publish MQTT Discovery (Unchanged from your code)
 void publish_mqtt_discovery(const std::string &mac, int entity_id) {
   if (mqtt::global_mqtt_client == nullptr ||
       !mqtt::global_mqtt_client->is_connected())
