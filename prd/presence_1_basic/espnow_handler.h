@@ -310,6 +310,8 @@ static std::string mqtt_device_topic(const std::string &mac) {
   return std::string(MQTT_DEVICE_TOPIC_PREFIX) + mac;
 }
 
+inline void mqtt_ensure_device_sync_subscription();
+
 // Drops one MAC from known_devices, clears retained esp_click/device/<mac>, trims HA discovery caches.
 static void remove_paired_device_from_hub(const std::string &mac) {
   mqtt_ensure_device_sync_subscription();
@@ -385,13 +387,13 @@ static void mqtt_on_device_topic(const std::string &topic, const std::string &pa
       std::string byteString = key_hex.substr(i * 2, 2);
       dk.key[i] = (uint8_t)strtol(byteString.c_str(), NULL, 16);
     }
-    if (dev.containsKey("last_counter"))
+    if (!dev["last_counter"].isNull())
       dk.last_counter = dev["last_counter"].as<uint32_t>();
-    if (dev.containsKey("current_session_id")) {
+    if (!dev["current_session_id"].isNull()) {
       std::string sid = dev["current_session_id"].as<std::string>();
       hex_decode_u64(sid, &dk.current_session_id);
     }
-    if (dev.containsKey("session_history")) {
+    if (!dev["session_history"].isNull()) {
       JsonArrayConst hist = dev["session_history"].as<JsonArrayConst>();
       int idx = 0;
       for (JsonVariantConst hv : hist) {
