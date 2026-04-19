@@ -28,6 +28,11 @@ struct DeviceKey {
 std::map<std::string, DeviceKey> known_devices;
 bool pairing_mode_active = false;
 
+// Pairing success requests YAML to turn off pairing_mode_switch (see interval).
+inline volatile bool g_request_close_pairing_mode = false;
+/// When true, next pairing switch turn-off skips the red LED (green success just ran).
+inline volatile bool g_pairing_close_skip_red_led = false;
+
 // 1. Unified Enums
 enum PressEvent { NONE_PRESS, SINGLE_PRESS, DOUBLE_PRESS, LONG_PRESS };
 enum BatteryStatus {
@@ -513,6 +518,9 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
 
         // Sync the new secure map to HA MQTT
         publish_known_devices_to_mqtt();
+
+        g_pairing_close_skip_red_led = true;
+        g_request_close_pairing_mode = true;
       }
 
       mbedtls_ecdh_free(&ecdh);

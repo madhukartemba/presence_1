@@ -139,6 +139,16 @@ interval:
       - lambda: |-
           led_tick();
 
+  - interval: 50ms
+    then:
+      - if:
+          condition:
+            lambda: return g_request_close_pairing_mode && pairing_mode_active;
+          then:
+            - lambda: |-
+                g_request_close_pairing_mode = false;
+            - switch.turn_off: pairing_mode_switch
+
 # --------------------
 # I2C
 # --------------------
@@ -236,15 +246,18 @@ switch:
     optimistic: true
     turn_on_action:
       - lambda: 'pairing_mode_active = true;'
-      # Call the new infinite C++ animation!
       - lambda: 'led_play_pairing();'
     turn_off_action:
       - lambda: 'pairing_mode_active = false;'
       - script.stop: pairing_mode_timer
-      # LED Feedback: Red wave indicates Pairing Mode is CLOSED (this overrides the infinite pairing loop)
-      - lambda: |-
-          static const LedColor red = {255, 0, 0};
-          led_play_reverse_center_wave(&red, 1);
+      - if:
+          condition:
+            lambda: return !g_pairing_close_skip_red_led;
+          then:
+            - lambda: |-
+                static const LedColor red = {255, 0, 0};
+                led_play_reverse_center_wave(&red, 1);
+      - lambda: 'g_pairing_close_skip_red_led = false;'
 
 
 # ====================
