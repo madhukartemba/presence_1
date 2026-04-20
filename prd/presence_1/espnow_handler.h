@@ -337,7 +337,9 @@ static void remove_paired_device_from_hub(const std::string &mac) {
 
   ESP_LOGI("esp_click", "Removed paired device %s (UNPAIR_REQUEST)", mac.c_str());
 
-  if (mqtt_paired_initial_sync_done && old_size > 0 && known_devices.empty()) {
+  // User-initiated unpair: always give red feedback (not gated on mqtt_paired_initial_sync_done;
+  // that flag avoids retained-MQTT replay flashes at boot, which does not apply here).
+  if (old_size > 0) {
     static const LedColor red = {255, 0, 0};
     led_play_reverse_center_wave(&red, 1);
   }
@@ -357,7 +359,7 @@ static void mqtt_on_device_topic(const std::string &topic, const std::string &pa
     if (known_devices.erase(topic_mac) > 0) {
       ESP_LOGI("esp_click", "Removed device %s (MQTT retained delete)",
                topic_mac.c_str());
-      if (mqtt_paired_initial_sync_done && old_size > 0 && known_devices.empty()) {
+      if (mqtt_paired_initial_sync_done && old_size > 0) {
         static const LedColor red = {255, 0, 0};
         led_play_reverse_center_wave(&red, 1);
       }
