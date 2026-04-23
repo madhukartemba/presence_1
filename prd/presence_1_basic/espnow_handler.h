@@ -722,7 +722,7 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
             std::string(battery_status_to_str(msg.data.batteryLevel.status)), 0, true);
         ESP_LOGI("esp_click", "[%s] Battery: %d%% %s (Encrypted)",
                  sender_mac.c_str(), msg.data.batteryLevel.level,
-                 std::string(battery_status_to_str(msg.data.batteryLevel.status)));
+                 battery_status_to_str(msg.data.batteryLevel.status));
       }
     }
   }
