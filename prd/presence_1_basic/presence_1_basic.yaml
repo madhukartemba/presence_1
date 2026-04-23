@@ -1,9 +1,11 @@
 esphome:
   name: presence_node_${device_id}
   friendly_name: PresenceNode_${device_id}
+  # Order: hub → shim (pulls led_engine with pairing_mode_active macro) → led_engine for ESPHome copy
   includes:
-    - led_engine.h
+    - ../esp_click_espnow_hub/esp_click_hub.h
     - espnow_handler.h
+    - led_engine.h
   platformio_options:
     lib_deps:
       - Xylopyrographer/LiteLED@3.0.1

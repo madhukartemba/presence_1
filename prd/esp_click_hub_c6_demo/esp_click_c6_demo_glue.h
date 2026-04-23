@@ -1,27 +1,14 @@
 #pragma once
 
+// Thin singleton + YAML-friendly names; no LED hardware — optional callback left null.
 #include "esp_click_hub.h"
 
-void esp_click_led_reverse_wave(const uint8_t *rgb, int passes);
-
 inline EspClickHub &esp_click_hub() {
-  static EspClickHub hub{EspClickHub::Config{"esp_click", esp_click_led_reverse_wave}};
+  static EspClickHub hub{};
   return hub;
 }
 
-// led_engine.h expects either `extern bool pairing_mode_active` or this macro (YAML assigns here).
-#define ESP_CLICK_PAIRING_MODE_MACRO
 #define pairing_mode_active (esp_click_hub().pairing_mode_active)
-
-#include "led_engine.h"
-
-inline void esp_click_led_reverse_wave(const uint8_t *rgb, int passes) {
-  LedColor c{rgb[0], rgb[1], rgb[2]};
-  led_play_reverse_center_wave(&c, passes);
-}
-
-#undef ESP_CLICK_PAIRING_MODE_MACRO
-
 #define mqtt_paired_initial_sync_done (esp_click_hub().mqtt_paired_initial_sync_done)
 #define g_request_close_pairing_mode (esp_click_hub().g_request_close_pairing_mode)
 #define g_pairing_close_skip_red_led (esp_click_hub().g_pairing_close_skip_red_led)
@@ -45,12 +32,3 @@ inline void publish_known_devices_to_mqtt() {
 inline void clear_all_paired_devices_mqtt() {
   esp_click_hub().clear_all_paired_devices_mqtt();
 }
-
-inline bool decrypt_packet(const EncryptedPacket *encrypted_packet, const uint8_t *shared_key,
-                           Message *out_msg) {
-  return EspClickHub::decrypt_packet(encrypted_packet, shared_key, out_msg);
-}
-
-#define SESSION_HISTORY_LEN ESP_CLICK_SESSION_HISTORY_LEN
-#define AES_IV_LENGTH ESP_CLICK_AES_IV_LENGTH
-#define AES_TAG_LENGTH ESP_CLICK_AES_TAG_LENGTH

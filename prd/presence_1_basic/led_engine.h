@@ -85,7 +85,9 @@ enum AnimationMode {
 };
 
 // Defined in espnow_handler.h — feedback waves resume magenta pairing when this stays true.
+#ifndef ESP_CLICK_PAIRING_MODE_MACRO
 extern bool pairing_mode_active;
+#endif
 
 // ==========================================
 // GLOBAL STATE

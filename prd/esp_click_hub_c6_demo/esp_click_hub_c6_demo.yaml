@@ -1,0 +1,97 @@
+# Minimal ESP32-C6 hub using modular `EspClickHub` (no LED strip).
+# Copy this folder beside `esp_click_espnow_hub/` as in this repo, or adjust `includes` paths.
+substitutions:
+  device_name: esp-click-hub-c6
+
+esphome:
+  name: ${device_name}
+  friendly_name: ESP Click hub (C6 demo)
+  includes:
+    - ../esp_click_espnow_hub/esp_click_hub.h
+    - esp_click_c6_demo_glue.h
+  platformio_options:
+    lib_deps:
+      - bblanchon/ArduinoJson@6.21.3
+
+esp32:
+  board: esp32-c6-devkitc-1
+  variant: esp32c6
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+mqtt:
+  broker: homeassistant.local
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: false
+  on_connect:
+    - lambda: |-
+        mqtt_ensure_device_sync_subscription();
+
+espnow:
+  auto_add_peer: true
+  on_broadcast:
+    then:
+      - lambda: |-
+          handle_espnow_packet(info.src_addr, data, size);
+  on_receive:
+    then:
+      - lambda: |-
+          handle_espnow_packet(info.src_addr, data, size);
+
+interval:
+  - interval: 50ms
+    then:
+      - if:
+          condition:
+            lambda: return g_request_close_pairing_mode && pairing_mode_active;
+          then:
+            - lambda: |-
+                g_request_close_pairing_mode = false;
+            - switch.turn_off: pairing_mode_switch
+
+switch:
+  - platform: template
+    name: "ESP-NOW Pairing Mode"
+    id: pairing_mode_switch
+    icon: mdi:bluetooth-connect
+    optimistic: true
+    turn_on_action:
+      - lambda: |-
+          pairing_mode_active = true;
+    turn_off_action:
+      - lambda: |-
+          pairing_mode_active = false;
+      - if:
+          condition:
+            lambda: return !g_pairing_close_skip_red_led;
+          then:
+            - logger.log:
+                format: "Pairing mode off (no LED on this demo board)"
+      - lambda: |-
+          g_pairing_close_skip_red_led = false;
+
+button:
+  - platform: template
+    name: "Clear All Paired Devices"
+    id: clear_macs_button
+    icon: mdi:delete-sweep
+    entity_category: config
+    on_press:
+      - lambda: |-
+          #ifdef USE_MQTT
+          clear_all_paired_devices_mqtt();
+          #endif
