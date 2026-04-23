@@ -35,6 +35,23 @@ enum BatteryStatus {
   CHARGE_FAULT
 };
 
+inline const char *battery_status_to_str(BatteryStatus s) {
+  switch (s) {
+  case CHARGING:
+    return "charging";
+  case DISCHARGING:
+    return "discharging";
+  case FULL_CHARGED:
+    return "full";
+  case NOT_CONNECTED:
+    return "not_connected";
+  case CHARGE_FAULT:
+    return "charge_fault";
+  default:
+    return "unknown";
+  }
+}
+
 enum MessageType {
   BUTTON_PRESS,
   BATTERY_STATUS,
@@ -623,8 +640,12 @@ inline void EspClickHub::handle_packet(const uint8_t *addr, const uint8_t *data,
         std::string bat_base_topic = "esp_click/" + sender_mac;
         mqtt::global_mqtt_client->publish(bat_base_topic + "/battery_level",
                                          std::to_string(msg.data.batteryLevel.level), 0, true);
-        ESP_LOGI(tag(), "[%s] Battery: %d%% (Encrypted)", sender_mac.c_str(),
-                 msg.data.batteryLevel.level);
+        mqtt::global_mqtt_client->publish(
+            bat_base_topic + "/battery_status",
+            std::string(battery_status_to_str(msg.data.batteryLevel.status)), 0, true);
+        ESP_LOGI(tag(), "[%s] Battery: %d%% %s (Encrypted)", sender_mac.c_str(),
+                 msg.data.batteryLevel.level,
+                 battery_status_to_str(msg.data.batteryLevel.status));
       }
     }
   } else if (size == sizeof(Message)) {
