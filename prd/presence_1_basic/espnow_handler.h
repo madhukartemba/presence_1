@@ -719,10 +719,10 @@ void handle_espnow_packet(const uint8_t *addr, const uint8_t *data, int size) {
             std::to_string(msg.data.batteryLevel.level), 0, true);
         mqtt::global_mqtt_client->publish(
             bat_base_topic + "/battery_status",
-            battery_status_to_str(msg.data.batteryLevel.status), 0, true);
+            std::string(battery_status_to_str(msg.data.batteryLevel.status)), 0, true);
         ESP_LOGI("esp_click", "[%s] Battery: %d%% %s (Encrypted)",
                  sender_mac.c_str(), msg.data.batteryLevel.level,
-                 battery_status_to_str(msg.data.batteryLevel.status));
+                 std::string(battery_status_to_str(msg.data.batteryLevel.status)));
       }
     }
   }
