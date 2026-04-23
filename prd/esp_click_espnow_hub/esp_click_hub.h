@@ -14,7 +14,7 @@
 #include <mbedtls/gcm.h>
 
 // ESP-NOW hub: encrypted app traffic (AES-GCM) vs cleartext pairing (ECDH when pairing_mode_active).
-// Optional LED feedback via Config::led_reverse_wave (nullptr = no-op).
+// Optional LED feedback via Config::led_feedback (nullptr = no-op).
 // Instantiate one EspClickHub (or use the glue header pattern from presence_1_basic/espnow_handler.h).
 
 static constexpr size_t ESP_CLICK_SESSION_HISTORY_LEN = 16;
@@ -96,13 +96,13 @@ struct __attribute__((packed)) EncryptedAckPacket {
 
 class EspClickHub {
 public:
-  using LedReverseWaveFn = void (*)(const uint8_t *rgb, int passes);
+  using LedFeedbackFn = void (*)(const uint8_t *rgb, int passes);
 
   struct Config {
     const char *log_tag;
-    LedReverseWaveFn led_reverse_wave;
-    Config() : log_tag("esp_click"), led_reverse_wave(nullptr) {}
-    Config(const char *tag, LedReverseWaveFn fn) : log_tag(tag ? tag : "esp_click"), led_reverse_wave(fn) {}
+    LedFeedbackFn led_feedback;
+    Config() : log_tag("esp_click"), led_feedback(nullptr) {}
+    Config(const char *tag, LedFeedbackFn fn) : log_tag(tag ? tag : "esp_click"), led_feedback(fn) {}
   };
 
   explicit EspClickHub(Config cfg = Config()) : cfg_(cfg) {}
@@ -134,10 +134,10 @@ private:
   const char *tag() const { return cfg_.log_tag ? cfg_.log_tag : "esp_click"; }
 
   void led_wave_rgb(uint8_t r, uint8_t g, uint8_t b, int passes = 1) const {
-    if (cfg_.led_reverse_wave == nullptr)
+    if (cfg_.led_feedback == nullptr)
       return;
     const uint8_t rgb[3] = {r, g, b};
-    cfg_.led_reverse_wave(rgb, passes);
+    cfg_.led_feedback(rgb, passes);
   }
 
   static std::string mac_to_str_(const uint8_t *mac) {
