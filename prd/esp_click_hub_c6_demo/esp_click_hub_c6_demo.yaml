@@ -18,6 +18,10 @@ esp32:
   variant: esp32c6
   framework:
     type: esp-idf
+    sdkconfig_options:
+      # Work around ESP-IDF mbedTLS GCM alt-linking mismatch on C6 builds.
+      # Using software AES restores standard mbedtls_gcm_* symbols.
+      CONFIG_MBEDTLS_HARDWARE_AES: "n"
 
 logger:
   level: DEBUG
