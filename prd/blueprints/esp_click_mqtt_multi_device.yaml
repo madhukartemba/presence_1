@@ -1,0 +1,146 @@
+blueprint:
+  name: ESP Click MQTT Multi-Device (All Actions)
+  description: >
+    Reliable handling of ESP Click 4 buttons × 3 press types.
+    Use mode queued (not single) so rapid MQTT events are not dropped when
+    two buttons fire close together.
+  domain: automation
+
+  input:
+    devices:
+      name: Device MACs
+      description: List of device MACs (lowercase, no separators), matching esp_click/<mac>/...
+      selector:
+        text:
+          multiple: true
+
+    # Button 1
+    b1_single:
+      name: Button 1 Single
+      default: []
+      selector: { action: {} }
+
+    b1_double:
+      name: Button 1 Double
+      default: []
+      selector: { action: {} }
+
+    b1_long:
+      name: Button 1 Long
+      default: []
+      selector: { action: {} }
+
+    # Button 2
+    b2_single:
+      name: Button 2 Single
+      default: []
+      selector: { action: {} }
+
+    b2_double:
+      name: Button 2 Double
+      default: []
+      selector: { action: {} }
+
+    b2_long:
+      name: Button 2 Long
+      default: []
+      selector: { action: {} }
+
+    # Button 3
+    b3_single:
+      name: Button 3 Single
+      default: []
+      selector: { action: {} }
+
+    b3_double:
+      name: Button 3 Double
+      default: []
+      selector: { action: {} }
+
+    b3_long:
+      name: Button 3 Long
+      default: []
+      selector: { action: {} }
+
+    # Button 4
+    b4_single:
+      name: Button 4 Single
+      default: []
+      selector: { action: {} }
+
+    b4_double:
+      name: Button 4 Double
+      default: []
+      selector: { action: {} }
+
+    b4_long:
+      name: Button 4 Long
+      default: []
+      selector: { action: {} }
+
+trigger:
+  - platform: mqtt
+    topic: esp_click/+/+/event
+
+variables:
+  devices: !input devices
+
+  mac: "{{ trigger.topic.split('/')[1] | lower | replace(':','') }}"
+  button: "{{ trigger.topic.split('/')[2].split('_')[1] }}"
+  press: "{{ trigger.payload | lower | trim }}"
+
+condition:
+  - condition: template
+    value_template: "{{ mac in devices }}"
+
+action:
+  - choose:
+
+      # Button 1
+      - conditions: "{{ button | string == '0' and press == 'single' }}"
+        sequence: !input b1_single
+
+      - conditions: "{{ button | string == '0' and press == 'double' }}"
+        sequence: !input b1_double
+
+      - conditions: "{{ button | string == '0' and press == 'long' }}"
+        sequence: !input b1_long
+
+      # Button 2
+      - conditions: "{{ button | string == '1' and press == 'single' }}"
+        sequence: !input b2_single
+
+      - conditions: "{{ button | string == '1' and press == 'double' }}"
+        sequence: !input b2_double
+
+      - conditions: "{{ button | string == '1' and press == 'long' }}"
+        sequence: !input b2_long
+
+      # Button 3
+      - conditions: "{{ button | string == '2' and press == 'single' }}"
+        sequence: !input b3_single
+
+      - conditions: "{{ button | string == '2' and press == 'double' }}"
+        sequence: !input b3_double
+
+      - conditions: "{{ button | string == '2' and press == 'long' }}"
+        sequence: !input b3_long
+
+      # Button 4
+      - conditions: "{{ button | string == '3' and press == 'single' }}"
+        sequence: !input b4_single
+
+      - conditions: "{{ button | string == '3' and press == 'double' }}"
+        sequence: !input b4_double
+
+      - conditions: "{{ button | string == '3' and press == 'long' }}"
+        sequence: !input b4_long
+
+    default:
+      - service: system_log.write
+        data:
+          message: "ESP Click: No match → mac={{ mac }}, button={{ button }}, press={{ press }}"
+          level: warning
+
+mode: queued
+max: 30
