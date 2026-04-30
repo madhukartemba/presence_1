@@ -56,6 +56,30 @@ espnow:
       - lambda: |-
           handle_espnow_packet(info.src_addr, data, size);
 
+# ====================
+# STATUS LED (single WS2812 NeoPixel on GPIO18)
+# ====================
+light:
+  - platform: esp32_rmt_led_strip
+    name: "Status LED"
+    id: status_led
+    pin: GPIO18
+    num_leds: 1
+    rgb_order: GRB
+    chipset: WS2812
+    default_transition_length: 0s
+    gamma_correct: 2.8
+    restore_mode: ALWAYS_OFF
+    effects:
+      - pulse:
+          name: "Pairing Pulse"
+          transition_length:
+            on_length: 1500ms
+            off_length: 1500ms
+          min_brightness: 0%
+          max_brightness: 100%
+          update_interval: 1500ms
+
 interval:
   - interval: 50ms
     then:
@@ -67,6 +91,65 @@ interval:
                 g_request_close_pairing_mode = false;
             - switch.turn_off: pairing_mode_switch
 
+# ====================
+# SCRIPTS
+# ====================
+script:
+  - id: pairing_mode_timer
+    mode: restart
+    then:
+      - switch.turn_on: pairing_mode_switch
+      - logger.log: "Pairing mode activated. Waiting for devices..."
+      - delay: 60s
+      - switch.turn_off: pairing_mode_switch
+      - logger.log: "Pairing mode timed out and closed."
+
+  # One-shot color flash with smooth fade-in / fade-out.
+  # Resumes the magenta pairing pulse if pairing mode is still active when the flash ends.
+  - id: flash_color
+    mode: restart
+    parameters:
+      r: float
+      g: float
+      b: float
+    then:
+      - light.turn_on:
+          id: status_led
+          red: !lambda 'return r;'
+          green: !lambda 'return g;'
+          blue: !lambda 'return b;'
+          brightness: 100%
+          transition_length: 220ms
+      - delay: 260ms
+      - light.turn_off:
+          id: status_led
+          transition_length: 700ms
+      - delay: 720ms
+      - if:
+          condition:
+            switch.is_on: pairing_mode_switch
+          then:
+            - light.turn_on:
+                id: status_led
+                red: 1.0
+                green: 0.0
+                blue: 1.0
+                brightness: 100%
+                effect: "Pairing Pulse"
+
+# ====================
+# EVENT ENTITY
+# ====================
+event:
+  - platform: template
+    name: "Button"
+    id: button_event
+    device_class: button
+    event_types:
+      - single_press
+      - double_press
+      - long_press
+
 switch:
   - platform: template
     name: "ESP-NOW Pairing Mode"
@@ -76,15 +159,29 @@ switch:
     turn_on_action:
       - lambda: |-
           pairing_mode_active = true;
+      - light.turn_on:
+          id: status_led
+          red: 1.0
+          green: 0.0
+          blue: 1.0
+          brightness: 100%
+          effect: "Pairing Pulse"
     turn_off_action:
       - lambda: |-
           pairing_mode_active = false;
+      - script.stop: pairing_mode_timer
+      - light.turn_off:
+          id: status_led
+          transition_length: 0s
       - if:
           condition:
             lambda: return !g_pairing_close_skip_red_led;
           then:
-            - logger.log:
-                format: "Pairing mode off (no LED on this demo board)"
+            - script.execute:
+                id: flash_color
+                r: 1.0
+                g: 0.0
+                b: 0.0
       - lambda: |-
           g_pairing_close_skip_red_led = false;
 
@@ -99,3 +196,78 @@ button:
           #ifdef USE_MQTT
           clear_all_paired_devices_mqtt();
           #endif
+
+# ====================
+# PUSH BUTTON (GPIO2)
+# ====================
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO2
+      mode: INPUT_PULLUP
+      inverted: true
+    internal: true
+    name: "Push Button"
+    on_multi_click:
+      # Triple press → toggle ESP-NOW pairing mode
+      - timing:
+          - ON for 50ms to 350ms
+          - OFF for 50ms to 350ms
+          - ON for 50ms to 350ms
+          - OFF for 50ms to 350ms
+          - ON for 50ms to 350ms
+          - OFF for at least 200ms
+        then:
+          - if:
+              condition:
+                switch.is_off: pairing_mode_switch
+              then:
+                - script.execute: pairing_mode_timer
+              else:
+                - switch.turn_off: pairing_mode_switch
+
+      # Double press → fire HA event + yellow flash
+      - timing:
+          - ON for 50ms to 350ms
+          - OFF for 50ms to 350ms
+          - ON for 50ms to 350ms
+          - OFF for at least 200ms
+        then:
+          - event.trigger:
+              id: button_event
+              event_type: double_press
+          - script.execute:
+              id: flash_color
+              r: 1.0
+              g: 1.0
+              b: 0.0
+          - logger.log: "Event Fired: Double Press"
+
+      # Single press → fire HA event + white flash
+      - timing:
+          - ON for 50ms to 350ms
+          - OFF for at least 200ms
+        then:
+          - event.trigger:
+              id: button_event
+              event_type: single_press
+          - script.execute:
+              id: flash_color
+              r: 1.0
+              g: 1.0
+              b: 1.0
+          - logger.log: "Event Fired: Single Press"
+
+      # Long press → fire HA event + blue flash
+      - timing:
+          - ON for at least 500ms
+        then:
+          - event.trigger:
+              id: button_event
+              event_type: long_press
+          - script.execute:
+              id: flash_color
+              r: 0.0
+              g: 0.0
+              b: 1.0
+          - logger.log: "Event Fired: Long Press"
