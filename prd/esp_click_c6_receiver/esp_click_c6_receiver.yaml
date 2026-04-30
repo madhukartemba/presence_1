@@ -204,8 +204,8 @@ binary_sensor:
   - platform: gpio
     pin:
       number: GPIO2
-      mode: INPUT_PULLUP
-      inverted: true
+      mode: INPUT
+      inverted: false
     internal: true
     name: "Push Button"
     on_multi_click:
