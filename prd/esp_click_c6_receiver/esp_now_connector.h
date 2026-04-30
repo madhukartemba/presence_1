@@ -1,8 +1,35 @@
 #pragma once
 #include "esp_click_hub.h"
 
+// Latched LED feedback request from the hub. The YAML interval polls `pending`
+// and dispatches the matching `flash_color` script. We can't call ESPHome's
+// `id(...)` from a header (declared later in main.cpp), so we go through this
+// small global trampoline.
+struct EspClickLedRequest {
+  volatile bool pending = false;
+  uint8_t r = 0;
+  uint8_t g = 0;
+  uint8_t b = 0;
+  int passes = 0;
+};
+
+inline EspClickLedRequest &esp_click_led_request() {
+  static EspClickLedRequest req;
+  return req;
+}
+
+inline void esp_click_led_feedback_cb(const uint8_t *rgb, int passes) {
+  auto &req = esp_click_led_request();
+  req.r = rgb[0];
+  req.g = rgb[1];
+  req.b = rgb[2];
+  req.passes = passes;
+  req.pending = true;
+}
+
 inline EspClickHub &esp_click_hub() {
-  static EspClickHub hub{};
+  static EspClickHub hub{
+      EspClickHub::Config{"esp_click", esp_click_led_feedback_cb}};
   return hub;
 }
 

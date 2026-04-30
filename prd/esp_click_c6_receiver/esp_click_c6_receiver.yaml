@@ -12,6 +12,10 @@ esphome:
   platformio_options:
     lib_deps:
       - bblanchon/ArduinoJson@6.21.3
+  on_boot:
+    - priority: 600
+      then:
+        - script.execute: play_boot
 
 esp32:
   board: esp32-c6-devkitc-1
@@ -35,6 +39,13 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   power_save_mode: none
+  on_connect:
+    then:
+      - script.stop: play_wifi_connecting
+      - script.execute: play_wifi_connected
+  on_disconnect:
+    then:
+      - script.execute: play_wifi_connecting
 
 mqtt:
   broker: homeassistant.local
@@ -57,7 +68,7 @@ espnow:
           handle_espnow_packet(info.src_addr, data, size);
 
 # ====================
-# STATUS LED (single WS2812 NeoPixel on GPIO18)
+# STATUS LED (single WS2812 NeoPixel on GPIO18) — internal-only
 # ====================
 light:
   - platform: esp32_rmt_led_strip
@@ -67,22 +78,32 @@ light:
     num_leds: 1
     rgb_order: GRB
     chipset: WS2812
+    internal: true
     default_transition_length: 0s
-    gamma_correct: 2.8
+    # Linear gamma to avoid quantization stutter at the tail of fade-outs:
+    # with gamma 2.8, ~30% of the brightness slider maps to physical 0 or 1
+    # on an 8-bit WS2812, which makes the LED dwell at "1/255" before snapping
+    # off. Linear keeps the steps even.
+    gamma_correct: 1.0
     restore_mode: ALWAYS_OFF
     effects:
+      # Slow breathing reused for pairing mode (magenta) and wifi-connecting (blue).
+      # Color is set by the caller via light.turn_on; this effect drives brightness.
+      # min_brightness 20% keeps the LED clearly lit through the dim phase — a
+      # continuous status indicator should never visually "go off" mid-animation.
       - pulse:
-          name: "Pairing Pulse"
+          name: "Status Pulse"
           transition_length:
             on_length: 1500ms
             off_length: 1500ms
-          min_brightness: 0%
+          min_brightness: 20%
           max_brightness: 100%
           update_interval: 1500ms
 
 interval:
   - interval: 50ms
     then:
+      # Auto-close pairing mode once a device finishes pairing.
       - if:
           condition:
             lambda: return g_request_close_pairing_mode && pairing_mode_active;
@@ -90,6 +111,19 @@ interval:
             - lambda: |-
                 g_request_close_pairing_mode = false;
             - switch.turn_off: pairing_mode_switch
+      # Dispatch LED feedback requests latched from the EspClickHub callback
+      # (e.g. green on successful pairing, red on unpair, white/yellow/blue on
+      # remote button press). See esp_now_connector.h.
+      - if:
+          condition:
+            lambda: 'return esp_click_led_request().pending;'
+          then:
+            - lambda: 'esp_click_led_request().pending = false;'
+            - script.execute:
+                id: flash_color
+                r: !lambda 'return esp_click_led_request().r / 255.0f;'
+                g: !lambda 'return esp_click_led_request().g / 255.0f;'
+                b: !lambda 'return esp_click_led_request().b / 255.0f;'
 
 # ====================
 # SCRIPTS
@@ -104,8 +138,63 @@ script:
       - switch.turn_off: pairing_mode_switch
       - logger.log: "Pairing mode timed out and closed."
 
-  # One-shot color flash with smooth fade-in / fade-out.
-  # Resumes the magenta pairing pulse if pairing mode is still active when the flash ends.
+  # Boot: slow white fade-in / fade-out, then hand off to wifi-connecting pulse
+  # (matches presence_1_basic boot → wifi_connecting transition).
+  - id: play_boot
+    mode: restart
+    then:
+      - light.turn_on:
+          id: status_led
+          red: 1.0
+          green: 1.0
+          blue: 1.0
+          brightness: 100%
+          transition_length: 900ms
+      - delay: 950ms
+      - light.turn_off:
+          id: status_led
+          transition_length: 700ms
+      - delay: 750ms
+      - if:
+          condition:
+            not:
+              wifi.connected:
+          then:
+            - script.execute: play_wifi_connecting
+
+  # Continuous blue breathing while wifi is not connected.
+  - id: play_wifi_connecting
+    mode: restart
+    then:
+      - light.turn_on:
+          id: status_led
+          red: 0.0
+          green: 0.0
+          blue: 1.0
+          brightness: 100%
+          effect: "Status Pulse"
+
+  # One-shot green fade once wifi comes up.
+  - id: play_wifi_connected
+    mode: restart
+    then:
+      - light.turn_on:
+          id: status_led
+          red: 0.0
+          green: 1.0
+          blue: 0.0
+          brightness: 100%
+          transition_length: 700ms
+      - delay: 750ms
+      - light.turn_off:
+          id: status_led
+          transition_length: 1400ms
+      - delay: 1450ms
+
+  # Gradual one-shot color flash. Used for button feedback (white/yellow/blue),
+  # remote-device feedback dispatched from the EspClickHub callback (white/yellow/
+  # blue/green/red), and the red close-flash when pairing mode ends.
+  # If pairing mode is still on after the flash ends we resume the magenta pulse.
   - id: flash_color
     mode: restart
     parameters:
@@ -119,12 +208,12 @@ script:
           green: !lambda 'return g;'
           blue: !lambda 'return b;'
           brightness: 100%
-          transition_length: 220ms
-      - delay: 260ms
+          transition_length: 500ms
+      - delay: 550ms
       - light.turn_off:
           id: status_led
-          transition_length: 700ms
-      - delay: 720ms
+          transition_length: 1500ms
+      - delay: 1520ms
       - if:
           condition:
             switch.is_on: pairing_mode_switch
@@ -135,7 +224,7 @@ script:
                 green: 0.0
                 blue: 1.0
                 brightness: 100%
-                effect: "Pairing Pulse"
+                effect: "Status Pulse"
 
 # ====================
 # EVENT ENTITY
@@ -165,7 +254,7 @@ switch:
           green: 0.0
           blue: 1.0
           brightness: 100%
-          effect: "Pairing Pulse"
+          effect: "Status Pulse"
     turn_off_action:
       - lambda: |-
           pairing_mode_active = false;
