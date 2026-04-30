@@ -88,17 +88,32 @@ light:
     restore_mode: ALWAYS_OFF
     effects:
       # Slow breathing reused for pairing mode (magenta) and wifi-connecting (blue).
-      # Color is set by the caller via light.turn_on; this effect drives brightness.
-      # min_brightness 20% keeps the LED clearly lit through the dim phase — a
-      # continuous status indicator should never visually "go off" mid-animation.
-      - pulse:
+      # Color is captured on effect start; this effect drives brightness only.
+      # Brightness range: (max_slider * 0.20) → max_slider, smoothstepped over a
+      # 3 s period. Built-in `pulse` effect doesn't accept a dynamic max, so we
+      # roll our own lambda effect that reads the user's max-brightness slider.
+      - lambda:
           name: "Status Pulse"
-          transition_length:
-            on_length: 1500ms
-            off_length: 1500ms
-          min_brightness: 20%
-          max_brightness: 100%
-          update_interval: 1500ms
+          update_interval: 30ms
+          lambda: |-
+            static uint32_t cycle_start_ms = 0;
+            if (initial_run) {
+              cycle_start_ms = millis();
+            }
+            const uint32_t period_ms = 3000;
+            const float t = (float)((millis() - cycle_start_ms) % period_ms) /
+                            (float)period_ms;
+            const float w = (t < 0.5f) ? (t * 2.0f) : (2.0f * (1.0f - t));
+            const float s = w * w * (3.0f - 2.0f * w);
+            const float max_b = id(led_max_brightness_pct).state / 100.0f;
+            const float min_b = 0.20f * max_b;
+            const float br = min_b + (max_b - min_b) * s;
+            auto call = id(status_led).turn_on();
+            call.set_transition_length(0);
+            call.set_brightness(br);
+            call.set_publish(false);
+            call.set_save(false);
+            call.perform();
 
 interval:
   - interval: 50ms
@@ -148,7 +163,7 @@ script:
           red: 1.0
           green: 1.0
           blue: 1.0
-          brightness: 100%
+          brightness: !lambda 'return id(led_max_brightness_pct).state / 100.0f;'
           transition_length: 900ms
       - delay: 950ms
       - light.turn_off:
@@ -171,7 +186,7 @@ script:
           red: 0.0
           green: 0.0
           blue: 1.0
-          brightness: 100%
+          brightness: !lambda 'return id(led_max_brightness_pct).state / 100.0f;'
           effect: "Status Pulse"
 
   # One-shot green fade once wifi comes up.
@@ -183,7 +198,7 @@ script:
           red: 0.0
           green: 1.0
           blue: 0.0
-          brightness: 100%
+          brightness: !lambda 'return id(led_max_brightness_pct).state / 100.0f;'
           transition_length: 700ms
       - delay: 750ms
       - light.turn_off:
@@ -207,7 +222,7 @@ script:
           red: !lambda 'return r;'
           green: !lambda 'return g;'
           blue: !lambda 'return b;'
-          brightness: 100%
+          brightness: !lambda 'return id(led_max_brightness_pct).state / 100.0f;'
           transition_length: 500ms
       - delay: 550ms
       - light.turn_off:
@@ -223,7 +238,7 @@ script:
                 red: 1.0
                 green: 0.0
                 blue: 1.0
-                brightness: 100%
+                brightness: !lambda 'return id(led_max_brightness_pct).state / 100.0f;'
                 effect: "Status Pulse"
 
 # ====================
@@ -239,6 +254,24 @@ event:
       - double_press
       - long_press
 
+# ====================
+# NUMBERS (HA)
+# ====================
+number:
+  - platform: template
+    name: "Status LED Max Brightness"
+    id: led_max_brightness_pct
+    icon: mdi:brightness-6
+    entity_category: config
+    unit_of_measurement: "%"
+    min_value: 5
+    max_value: 100
+    step: 1
+    initial_value: 100
+    restore_value: true
+    optimistic: true
+    mode: slider
+
 switch:
   - platform: template
     name: "ESP-NOW Pairing Mode"
@@ -253,7 +286,7 @@ switch:
           red: 1.0
           green: 0.0
           blue: 1.0
-          brightness: 100%
+          brightness: !lambda 'return id(led_max_brightness_pct).state / 100.0f;'
           effect: "Status Pulse"
     turn_off_action:
       - lambda: |-
