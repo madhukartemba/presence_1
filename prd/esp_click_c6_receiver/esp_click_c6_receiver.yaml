@@ -1,14 +1,14 @@
 # Minimal ESP32-C6 hub using modular `EspClickHub` (no LED strip).
 # Copy this folder beside `esp_click_espnow_hub/` as in this repo, or adjust `includes` paths.
 substitutions:
-  device_name: esp-click-hub-c6
+  device_id: 0
 
 esphome:
-  name: ${device_name}
-  friendly_name: ESP Click hub (C6 demo)
+  name: esp-click-c6-receiver-${device_id}
+  friendly_name: ESP Click C6 Receiver ${device_id}
   includes:
     - ../esp_click_espnow_hub/esp_click_hub.h
-    - esp_click_c6_demo_glue.h
+    - esp_now_connector.h
   platformio_options:
     lib_deps:
       - bblanchon/ArduinoJson@6.21.3

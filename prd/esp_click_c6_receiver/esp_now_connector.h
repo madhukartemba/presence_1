@@ -1,6 +1,4 @@
 #pragma once
-
-// Thin singleton + YAML-friendly names; no LED hardware — optional callback left null.
 #include "esp_click_hub.h"
 
 inline EspClickHub &esp_click_hub() {
