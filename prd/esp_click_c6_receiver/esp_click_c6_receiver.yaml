@@ -393,3 +393,10 @@ binary_sensor:
               g: 0.0
               b: 1.0
           - logger.log: "Event Fired: Long Press"
+
+sensor:
+  - platform: wifi_signal
+    name: "Wi-Fi Signal"
+    id: wifi_signal_dbm
+    update_interval: 60s
+    entity_category: diagnostic
