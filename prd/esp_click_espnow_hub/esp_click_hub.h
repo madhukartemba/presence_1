@@ -296,7 +296,7 @@ inline void EspClickHub::publish_mqtt_discovery_(const std::string &mac, int ent
 
   std::string device_json = R"("device":{"identifiers":["esp_click_)" + mac +
                             R"("],"name":"ESP Click )" + mac +
-                            R"(","manufacturer":"M Indsutries","model":"ESP Click V1"})";
+                            R"(","manufacturer":"M Industries","model":"ESP Click V1"})";
 
   if (std::find(discovered_macs_.begin(), discovered_macs_.end(), mac) ==
       discovered_macs_.end()) {
