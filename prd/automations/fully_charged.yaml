@@ -1,0 +1,30 @@
+alias: "ESP Click: Fully Charged Alert"
+description: Notify when ESP device is fully charged
+triggers:
+  - topic: esp_click/+/battery_status
+    trigger: mqtt
+conditions:
+  - condition: template
+    value_template: |
+      {{ trigger.payload == 'full' }}
+actions:
+  - variables:
+      mac: "{{ trigger.topic.split('/')[1] }}"
+      matched_entity: |
+        {{ states.sensor 
+           | selectattr('entity_id', 'search', 'esp_click_' ~ mac) 
+           | map(attribute='entity_id') 
+           | first | default('') }}
+      ha_device_name: |
+        {% if matched_entity %}
+          {% set d_id = device_id(matched_entity) %}
+          {{ device_attr(d_id, 'name_by_user') | default(device_attr(d_id, 'name'), true) | default(mac, true) }}
+        {% else %}
+          {{ mac }}
+        {% endif %}
+  - action: notify.notify
+    data:
+      title: "ESP Click: Fully Charged 🔋"
+      message: |
+        {{ ha_device_name }} is fully charged.
+mode: parallel
