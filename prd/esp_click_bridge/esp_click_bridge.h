@@ -13,9 +13,9 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/gcm.h>
 
-// ESP-NOW hub: encrypted app traffic (AES-GCM) vs cleartext pairing (ECDH when pairing_mode_active).
+// ESP-NOW bridge: encrypted app traffic (AES-GCM) vs cleartext pairing (ECDH when pairing_mode_active).
 // Optional LED feedback via Config::led_feedback (nullptr = no-op).
-// Instantiate one EspClickHub (or use the glue header pattern from presence_1_basic/espnow_handler.h).
+// Instantiate one EspClickBridge (or use the glue header pattern from presence_1_basic/espnow_handler.h).
 
 static constexpr size_t ESP_CLICK_SESSION_HISTORY_LEN = 16;
 
@@ -111,7 +111,7 @@ struct __attribute__((packed)) EncryptedAckPacket {
   uint8_t tag[ESP_CLICK_AES_TAG_LENGTH];
 };
 
-class EspClickHub {
+class EspClickBridge {
 public:
   using LedFeedbackFn = void (*)(const uint8_t *rgb, int passes);
 
@@ -122,7 +122,7 @@ public:
     Config(const char *tag, LedFeedbackFn fn) : log_tag(tag ? tag : "esp_click"), led_feedback(fn) {}
   };
 
-  explicit EspClickHub(Config cfg = Config()) : cfg_(cfg) {}
+  explicit EspClickBridge(Config cfg = Config()) : cfg_(cfg) {}
 
   std::map<std::string, DeviceKey> known_devices;
   bool mqtt_paired_initial_sync_done{false};
@@ -255,7 +255,7 @@ private:
   }
 
   void publish_mqtt_discovery_(const std::string &mac, int entity_id);
-  void remove_paired_device_from_hub_(const std::string &mac);
+  void remove_paired_device_from_bridge_(const std::string &mac);
   void mqtt_on_device_topic_(const std::string &topic, const std::string &payload);
   void publish_device_key_json_to_mqtt__(const std::string &mac, const DeviceKey &dk);
 
@@ -268,10 +268,10 @@ private:
 };
 
 // -----------------------------------------------------------------------------
-// EspClickHub implementation (header-only)
+// EspClickBridge implementation (header-only)
 // -----------------------------------------------------------------------------
 
-inline bool EspClickHub::decrypt_packet(const EncryptedPacket *encrypted_packet,
+inline bool EspClickBridge::decrypt_packet(const EncryptedPacket *encrypted_packet,
                                        const uint8_t *shared_key, Message *out_msg) {
   mbedtls_gcm_context gcm;
   mbedtls_gcm_init(&gcm);
@@ -290,7 +290,7 @@ inline bool EspClickHub::decrypt_packet(const EncryptedPacket *encrypted_packet,
   return ret == 0;
 }
 
-inline void EspClickHub::publish_mqtt_discovery_(const std::string &mac, int entity_id) {
+inline void EspClickBridge::publish_mqtt_discovery_(const std::string &mac, int entity_id) {
   if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected())
     return;
 
@@ -355,7 +355,7 @@ inline void EspClickHub::publish_mqtt_discovery_(const std::string &mac, int ent
   }
 }
 
-inline void EspClickHub::remove_paired_device_from_hub_(const std::string &mac) {
+inline void EspClickBridge::remove_paired_device_from_bridge_(const std::string &mac) {
   mqtt_ensure_device_sync_subscription();
   int old_size = (int)known_devices.size();
   if (known_devices.erase(mac) == 0)
@@ -382,7 +382,7 @@ inline void EspClickHub::remove_paired_device_from_hub_(const std::string &mac) 
   mqtt_paired_initial_sync_done = true;
 }
 
-inline void EspClickHub::mqtt_on_device_topic_(const std::string &topic,
+inline void EspClickBridge::mqtt_on_device_topic_(const std::string &topic,
                                                const std::string &payload) {
   const size_t plen = strlen(MQTT_DEVICE_TOPIC_PREFIX);
   if (topic.size() <= plen || topic.compare(0, plen, MQTT_DEVICE_TOPIC_PREFIX) != 0)
@@ -444,7 +444,7 @@ inline void EspClickHub::mqtt_on_device_topic_(const std::string &topic,
   mqtt_paired_initial_sync_done = true;
 }
 
-inline void EspClickHub::mqtt_ensure_device_sync_subscription() {
+inline void EspClickBridge::mqtt_ensure_device_sync_subscription() {
   if (mqtt_sub_registered_ || mqtt::global_mqtt_client == nullptr)
     return;
   mqtt_sub_registered_ = true;
@@ -456,7 +456,7 @@ inline void EspClickHub::mqtt_ensure_device_sync_subscription() {
       0);
 }
 
-inline void EspClickHub::publish_device_key_json_to_mqtt__(const std::string &mac,
+inline void EspClickBridge::publish_device_key_json_to_mqtt__(const std::string &mac,
                                                          const DeviceKey &dk) {
   JsonDocument doc;
   JsonObject dev = doc.to<JsonObject>();
@@ -473,7 +473,7 @@ inline void EspClickHub::publish_device_key_json_to_mqtt__(const std::string &ma
   mqtt::global_mqtt_client->publish(mqtt_device_topic_(mac), json_str, 0, true);
 }
 
-inline void EspClickHub::publish_one_device_to_mqtt(const std::string &mac) {
+inline void EspClickBridge::publish_one_device_to_mqtt(const std::string &mac) {
   mqtt_ensure_device_sync_subscription();
   if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected())
     return;
@@ -483,7 +483,7 @@ inline void EspClickHub::publish_one_device_to_mqtt(const std::string &mac) {
   publish_device_key_json_to_mqtt__(mac, it->second);
 }
 
-inline void EspClickHub::publish_known_devices_to_mqtt() {
+inline void EspClickBridge::publish_known_devices_to_mqtt() {
   mqtt_ensure_device_sync_subscription();
   if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected())
     return;
@@ -492,7 +492,7 @@ inline void EspClickHub::publish_known_devices_to_mqtt() {
   ESP_LOGI(tag(), "Published device keys to esp_click/device/<mac> (retained).");
 }
 
-inline void EspClickHub::clear_all_paired_devices_mqtt() {
+inline void EspClickBridge::clear_all_paired_devices_mqtt() {
   mqtt_ensure_device_sync_subscription();
   if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected())
     return;
@@ -513,7 +513,7 @@ inline void EspClickHub::clear_all_paired_devices_mqtt() {
   ESP_LOGI(tag(), "Cleared all paired devices (per-MQTT-topic delete).");
 }
 
-inline bool EspClickHub::encrypt_ack_packet_(const AckMessage *plain, const uint8_t *shared_key,
+inline bool EspClickBridge::encrypt_ack_packet_(const AckMessage *plain, const uint8_t *shared_key,
                                             uint64_t session_id, uint32_t counter,
                                             EncryptedAckPacket *out, const char *lg) {
   uint8_t iv[ESP_CLICK_AES_IV_LENGTH];
@@ -541,7 +541,7 @@ inline bool EspClickHub::encrypt_ack_packet_(const AckMessage *plain, const uint
   return true;
 }
 
-inline void EspClickHub::send_encrypted_ack_to_peer_(const uint8_t *addr,
+inline void EspClickBridge::send_encrypted_ack_to_peer_(const uint8_t *addr,
                                                     const std::string &sender_mac,
                                                     uint64_t session_id, uint32_t counter,
                                                     bool success, AckReason fail_reason) {
@@ -561,7 +561,7 @@ inline void EspClickHub::send_encrypted_ack_to_peer_(const uint8_t *addr,
     ESP_LOGW(tag(), "esp_now_send encrypted ACK failed: %s", esp_err_to_name(err));
 }
 
-inline void EspClickHub::handle_packet(const uint8_t *addr, const uint8_t *data, int size) {
+inline void EspClickBridge::handle_packet(const uint8_t *addr, const uint8_t *data, int size) {
   std::string sender_mac = mac_to_str_(addr);
   bool is_known = (known_devices.find(sender_mac) != known_devices.end());
 
@@ -603,7 +603,7 @@ inline void EspClickHub::handle_packet(const uint8_t *addr, const uint8_t *data,
     if (msg.type == UNPAIR_REQUEST) {
       ESP_LOGI(tag(), "UNPAIR_REQUEST from %s — ACK then remove from MQTT", sender_mac.c_str());
       send_encrypted_ack_to_peer_(addr, sender_mac, msg.sessionId, msg.counter, true);
-      remove_paired_device_from_hub_(sender_mac);
+      remove_paired_device_from_bridge_(sender_mac);
       return;
     }
 

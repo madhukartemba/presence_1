@@ -1,5 +1,5 @@
-# Minimal ESP32-C6 hub using modular `EspClickHub` (no LED strip).
-# Copy this folder beside `esp_click_espnow_hub/` as in this repo, or adjust `includes` paths.
+# Minimal ESP32-C6 bridge using modular `EspClickBridge` (no LED strip).
+# Copy this folder beside `esp_click_bridge/` as in this repo, or adjust `includes` paths.
 substitutions:
   device_id: 0
 
@@ -7,7 +7,7 @@ esphome:
   name: esp-click-c6-receiver-${device_id}
   friendly_name: ESP Click C6 Receiver ${device_id}
   includes:
-    - ../esp_click_espnow_hub/esp_click_hub.h
+    - ../esp_click_bridge/esp_click_bridge.h
     - esp_now_connector.h
   platformio_options:
     lib_deps:
@@ -126,7 +126,7 @@ interval:
             - lambda: |-
                 g_request_close_pairing_mode = false;
             - switch.turn_off: pairing_mode_switch
-      # Dispatch LED feedback requests latched from the EspClickHub callback
+      # Dispatch LED feedback requests latched from the EspClickBridge callback
       # (e.g. green on successful pairing, red on unpair, white/yellow/blue on
       # remote button press). See esp_now_connector.h.
       - if:
@@ -207,7 +207,7 @@ script:
       - delay: 1450ms
 
   # Gradual one-shot color flash. Used for button feedback (white/yellow/blue),
-  # remote-device feedback dispatched from the EspClickHub callback (white/yellow/
+  # remote-device feedback dispatched from the EspClickBridge callback (white/yellow/
   # blue/green/red), and the red close-flash when pairing mode ends.
   # If pairing mode is still on after the flash ends we resume the magenta pulse.
   - id: flash_color

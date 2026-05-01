@@ -2,7 +2,7 @@ esphome:
   name: presence_node_${device_id}
   friendly_name: PresenceNode_${device_id}
   includes:
-    - ../esp_click_espnow_hub/esp_click_hub.h
+    - ../esp_click_bridge/esp_click_bridge.h
     - espnow_handler.h
     - led_engine.h
   platformio_options:
