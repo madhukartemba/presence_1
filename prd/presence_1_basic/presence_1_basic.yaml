@@ -180,6 +180,11 @@ sensor:
     update_interval: 30s
     lambda: |-
       return id(infrared_lux_internal).state;
+  - platform: wifi_signal
+    name: "Wi-Fi Signal"
+    id: wifi_signal_dbm
+    update_interval: 60s
+    entity_category: diagnostic
 
 # ====================
 # SCRIPTS
