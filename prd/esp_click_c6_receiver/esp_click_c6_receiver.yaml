@@ -47,6 +47,15 @@ wifi:
     then:
       - script.execute: play_wifi_connecting
 
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 1100ms
+    window: 1100ms
+    active: true
+
+bluetooth_proxy:
+  active: true
+
 mqtt:
   broker: homeassistant.local
   username: !secret mqtt_username
