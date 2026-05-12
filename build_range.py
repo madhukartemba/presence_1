@@ -29,6 +29,11 @@ def main() -> int:
         help="Only compile firmware for each device",
     )
     parser.add_argument(
+        "--upload-device",
+        default="OTA",
+        help="Upload target for ESPHome run (default: OTA). Use 'ask' to show interactive picker.",
+    )
+    parser.add_argument(
         "--clean",
         action="store_true",
         help="Clean build files before each device build",
@@ -64,6 +69,8 @@ def main() -> int:
             args.yaml,
             "--device-id",
             str(device_id),
+            "--upload-device",
+            args.upload_device,
         ]
         if args.compile_only:
             cmd.append("--compile-only")

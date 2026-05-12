@@ -62,6 +62,11 @@ def main():
 
     parser.add_argument("yaml", help="Path to YAML file")
     parser.add_argument("--device-id", required=True, help="Device ID")
+    parser.add_argument(
+        "--upload-device",
+        default="OTA",
+        help="Upload target for ESPHome run (default: OTA). Use 'ask' to show interactive picker.",
+    )
     parser.add_argument("--compile-only", action="store_true", help="Only compile")
     parser.add_argument("--clean", action="store_true", help="Clean build files first")
     parser.add_argument("--reinstall", action="store_true", help="Recreate venv")
@@ -121,6 +126,8 @@ def main():
             "compile" if args.compile_only else "run",
             str(yaml_relative),
         ]
+        if not args.compile_only and args.upload_device.lower() != "ask":
+            command.extend(["--device", args.upload_device])
 
         print("\nProject root:", project_root)
         print("Running command:")
