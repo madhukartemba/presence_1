@@ -6,9 +6,10 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 
-def find_project_root(start: Path) -> Path | None:
+def find_project_root(start: Path) -> Optional[Path]:
     current = start.resolve()
     for parent in [current] + list(current.parents):
         if (parent / "secrets.yaml").exists():
