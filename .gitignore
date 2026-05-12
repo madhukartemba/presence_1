@@ -17,3 +17,6 @@ esphome-venv
 
 #Python
 __pycache__
+
+# Temporary local build logs
+.tmp/build_range_logs

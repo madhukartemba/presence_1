@@ -4,6 +4,7 @@ import argparse
 import concurrent.futures
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -29,15 +30,40 @@ def ensure_local_secrets(project_root: Path, yaml_path: Path) -> None:
         local_secrets.write_bytes(root_secrets.read_bytes())
 
 
-def run_build(script_dir: Path, cmd: list[str], device_id: int) -> tuple[int, int, str]:
-    result = subprocess.run(
-        cmd,
-        cwd=script_dir,
-        text=True,
-        capture_output=True,
-    )
-    output = (result.stdout or "") + (result.stderr or "")
-    return device_id, result.returncode, output
+def run_build(
+    script_dir: Path,
+    cmd: list[str],
+    device_id: int,
+    log_path: Path,
+    stream_to_stdout: bool = False,
+) -> tuple[int, int, Path]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as log_file:
+        log_file.write(f"device_id: {device_id}\n")
+        log_file.write(f"cwd: {script_dir}\n")
+        log_file.write(f"command: {' '.join(cmd)}\n")
+        log_file.write("-" * 80 + "\n")
+        log_file.flush()
+
+        process = subprocess.Popen(
+            cmd,
+            cwd=script_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            log_file.write(line)
+            if stream_to_stdout:
+                print(line, end="", flush=True)
+        process.wait()
+        log_file.write("\n" + "-" * 80 + "\n")
+        log_file.write(f"exit_code: {process.returncode}\n")
+        log_file.flush()
+
+    return device_id, process.returncode, log_path
 
 
 def main() -> int:
@@ -136,6 +162,10 @@ def main() -> int:
 
     failures = []
     device_ids = list(range(args.start_id, args.end_id + 1))
+    run_label = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logs_dir = script_dir / ".tmp" / "build_range_logs" / run_label
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nLogs directory: {logs_dir}")
 
     def build_cmd_for(device_id: int) -> list[str]:
         cmd = [
@@ -157,20 +187,35 @@ def main() -> int:
     if args.jobs == 1:
         for device_id in device_ids:
             cmd = build_cmd_for(device_id)
+            log_path = logs_dir / f"device_{device_id}.log"
             print(f"\n=== Building device_id={device_id} ===")
             print(" ".join(cmd))
+            print(f"Log: {log_path}")
 
-            result = subprocess.run(cmd, cwd=script_dir)
-            if result.returncode != 0:
+            _, returncode, _ = run_build(
+                script_dir,
+                cmd,
+                device_id,
+                log_path,
+                stream_to_stdout=True,
+            )
+            if returncode != 0:
                 failures.append(device_id)
-                print(f"Build failed for device_id={device_id} (exit {result.returncode}).")
+                print(f"Build failed for device_id={device_id} (exit {returncode}).")
                 if not args.continue_on_error:
-                    return result.returncode
+                    return returncode
     else:
         print(f"\n=== Running jobs in parallel (jobs={args.jobs}) ===")
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
             future_map = {
-                executor.submit(run_build, script_dir, build_cmd_for(device_id), device_id): device_id
+                executor.submit(
+                    run_build,
+                    script_dir,
+                    build_cmd_for(device_id),
+                    device_id,
+                    logs_dir / f"device_{device_id}.log",
+                    False,
+                ): device_id
                 for device_id in device_ids
             }
             total = len(future_map)
@@ -192,15 +237,14 @@ def main() -> int:
                     continue
 
                 for future in done:
-                    device_id, returncode, output = future.result()
+                    device_id, returncode, log_path = future.result()
                     completed += 1
                     print(
                         f"\n=== Result for device_id={device_id} (exit {returncode}) "
                         f"[{completed}/{total}] ===",
                         flush=True,
                     )
-                    if output.strip():
-                        print(output, flush=True)
+                    print(f"Log: {log_path}", flush=True)
                     if returncode != 0:
                         failures.append(device_id)
 
