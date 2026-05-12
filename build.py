@@ -80,6 +80,11 @@ def main():
         action="store_true",
         help="Do not remove locally created YAML-directory secrets.yaml",
     )
+    parser.add_argument(
+        "--no-logs",
+        action="store_true",
+        help="For esphome run: pass --no-logs so the process exits after upload instead of streaming device logs.",
+    )
 
     args = parser.parse_args()
 
@@ -142,6 +147,8 @@ def main():
         ]
         if not args.compile_only and args.upload_device.lower() != "ask":
             command.extend(["--device", args.upload_device])
+        if not args.compile_only and args.no_logs:
+            command.append("--no-logs")
 
         print("\nProject root:", project_root)
         print("Running command:")

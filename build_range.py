@@ -181,6 +181,9 @@ def main() -> int:
         ]
         if args.compile_only:
             cmd.append("--compile-only")
+        else:
+            # esphome run otherwise tails logs forever; range builds would never advance.
+            cmd.append("--no-logs")
         if args.clean:
             cmd.append("--clean")
         return cmd
