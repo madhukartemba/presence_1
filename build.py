@@ -70,6 +70,16 @@ def main():
     parser.add_argument("--compile-only", action="store_true", help="Only compile")
     parser.add_argument("--clean", action="store_true", help="Clean build files first")
     parser.add_argument("--reinstall", action="store_true", help="Recreate venv")
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Only prepare venv/secrets and exit",
+    )
+    parser.add_argument(
+        "--keep-local-secrets",
+        action="store_true",
+        help="Do not remove locally created YAML-directory secrets.yaml",
+    )
 
     args = parser.parse_args()
 
@@ -107,6 +117,10 @@ def main():
                 shutil.copy2(root_secrets, local_secrets)
             secrets_created = True
 
+        if args.prepare_only:
+            print("Preparation complete.")
+            return
+
         # Optional clean
         if args.clean:
             clean_cmd = [
@@ -138,7 +152,7 @@ def main():
 
     finally:
         # Clean up the temporary secrets file if we created it
-        if secrets_created and local_secrets.exists():
+        if secrets_created and local_secrets.exists() and not args.keep_local_secrets:
             try:
                 local_secrets.unlink()
             except Exception:
