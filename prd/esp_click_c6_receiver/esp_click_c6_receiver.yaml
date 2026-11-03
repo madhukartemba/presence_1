@@ -64,6 +64,37 @@ espnow:
       - lambda: |-
           handle_espnow_packet(info.src_addr, data, size);
 
+# Passive scan for eternal_nrf BTHome advertisements (UUID 0xFCD2, name "Eternal").
+# Window is almost the full interval so a ~1.5 s advertising burst is not missed
+# while Wi-Fi/ESP-NOW is also using the radio.
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 160ms
+    window: 150ms
+    active: false
+    continuous: true
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            bool match = x.get_name() == "Eternal";
+            const std::vector<uint8_t> *payload = nullptr;
+            for (const auto &sd : x.get_service_datas()) {
+              if (sd.uuid.contains(0xD2, 0xFC)) {
+                match = true;
+                payload = &sd.data;
+                break;
+              }
+            }
+            if (!match) return;
+            if (payload == nullptr) {
+              ESP_LOGI("bthome", "Eternal %s rssi=%d (no FCD2 payload)",
+                       x.address_str().c_str(), x.get_rssi());
+              return;
+            }
+            ESP_LOGI("bthome", "Eternal %s rssi=%d bytes=%u data=%s",
+                     x.address_str().c_str(), x.get_rssi(), (unsigned) payload->size(),
+                     format_hex_pretty(*payload).c_str());
+
 # ====================
 # STATUS LED (single WS2812 NeoPixel on GPIO18) — internal-only
 # ====================
