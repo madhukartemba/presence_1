@@ -5,6 +5,7 @@ esphome:
     - ../esp_click_bridge/esp_click_bridge.h
     - espnow_handler.h
     - led_engine.h
+    - ../presence_1_basic/bthome_eternal.h
   platformio_options:
     lib_deps:
       - Xylopyrographer/LiteLED@3.0.1
@@ -69,7 +70,66 @@ espnow:
     then:
       - lambda: |-
           handle_espnow_packet(info.src_addr, data, size);
-          
+
+# Passive scan for eternal_nrf BTHome adverts (name "Eternal", UUID 0xFCD2).
+# The window is almost the whole interval so a ~1.5 s burst is still heard
+# while Wi-Fi and ESP-NOW share the radio. Readings are published on the
+# ESPHome API, which Home Assistant already uses for this node.
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 160ms
+    window: 150ms
+    active: false
+    continuous: true
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            const std::vector<uint8_t> *payload = nullptr;
+            for (const auto &sd : x.get_service_datas()) {
+              if (sd.uuid.contains(0xD2, 0xFC)) {
+                payload = &sd.data;
+                break;
+              }
+            }
+            if (payload == nullptr || x.get_name() != "Eternal") return;
+            const EternalBthome reading =
+                parse_eternal_bthome(payload->data(), payload->size());
+            if (!reading.ok) return;
+
+            static uint32_t last_ms = 0;
+            static int last_button = -1;
+            static int last_opening = -1;
+            static std::string last_mac;
+            const std::string mac = x.address_str();
+            const bool edge =
+                (reading.has_button && (int) reading.button != last_button) ||
+                (reading.has_opening && (int) reading.opening != last_opening) ||
+                mac != last_mac;
+            const uint32_t now = millis();
+            if (!edge && now - last_ms < 1000) return;
+            last_ms = now;
+            last_mac = mac;
+
+            id(eternal_address).publish_state(mac);
+            id(eternal_rssi).publish_state(x.get_rssi());
+            if (reading.has_battery) id(eternal_battery).publish_state(reading.battery);
+            if (reading.has_temp) id(eternal_temperature).publish_state(reading.temp_c);
+            if (reading.has_hum) id(eternal_humidity).publish_state(reading.humidity);
+            if (reading.has_button) {
+              last_button = reading.button ? 1 : 0;
+              id(eternal_button).publish_state(reading.button);
+            }
+            if (reading.has_opening) {
+              last_opening = reading.opening ? 1 : 0;
+              id(eternal_opening).publish_state(reading.opening);
+            }
+            ESP_LOGI("bthome", "Eternal %s rssi=%d temp=%.2f hum=%.2f batt=%.0f btn=%d open=%d",
+                     mac.c_str(), x.get_rssi(), reading.temp_c, reading.humidity,
+                     reading.battery, reading.button ? 1 : 0, reading.opening ? 1 : 0);
+
+# Forward the same advertisements to Home Assistant's BTHome integration.
+bluetooth_proxy:
+  active: false
 
 globals:
   - id: motion_enabled
@@ -124,6 +184,11 @@ text_sensor:
   - platform: ld2420
     fw_version:
       name: "LD2420 Firmware Version"
+  - platform: template
+    name: "Eternal Address"
+    id: eternal_address
+    icon: mdi:bluetooth
+    entity_category: diagnostic
 
 # ====================
 # EVENT ENTITY
@@ -204,6 +269,35 @@ sensor:
     name: "Wi-Fi Signal"
     id: wifi_signal_dbm
     update_interval: 60s
+    entity_category: diagnostic
+  - platform: template
+    name: "Eternal Temperature"
+    id: eternal_temperature
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 2
+  - platform: template
+    name: "Eternal Humidity"
+    id: eternal_humidity
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 2
+  - platform: template
+    name: "Eternal Battery"
+    id: eternal_battery
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+  - platform: template
+    name: "Eternal RSSI"
+    id: eternal_rssi
+    unit_of_measurement: "dBm"
+    device_class: signal_strength
+    state_class: measurement
+    accuracy_decimals: 0
     entity_category: diagnostic
 
 # ====================
@@ -308,6 +402,14 @@ button:
 # BINARY SENSORS
 # ====================
 binary_sensor:
+  - platform: template
+    name: "Eternal Opening"
+    id: eternal_opening
+    device_class: opening
+  - platform: template
+    name: "Eternal Button"
+    id: eternal_button
+    icon: mdi:gesture-tap-button
   # UART Presence
   - platform: ld2420
     has_target:
